@@ -9,7 +9,6 @@
  * tooltip per the read-only dashboard spec (D5).
  */
 
-import * as React from 'react';
 import { Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
