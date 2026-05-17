@@ -37,7 +37,8 @@ run_test() {
 # ------------------------------------------------------------------
 
 MOCK_DIR="$(mktemp -d)"
-trap 'rm -rf "$MOCK_DIR"' EXIT
+COMPOSE_FIXTURE_DIR=""
+trap 'rm -rf "$MOCK_DIR" "$COMPOSE_FIXTURE_DIR"' EXIT
 
 make_mock_docker() {
   local size="$1"
@@ -200,6 +201,122 @@ run_platform_test "--platform: fail loudly when reported size is 0 (REV5 guard)"
 # --platform returns empty string → must exit 1 (REV5 guard for empty output)
 make_mock_docker_platform ""
 run_platform_test "--platform: fail loudly when size output is empty (REV5 guard)" 1 "209715200"
+
+# ------------------------------------------------------------------
+# compose-parity image_name() regression — M5 guard
+#
+# Verifies the sed pipeline in tests/docker/compose-parity.sh correctly
+# strips only the trailing :tag and does NOT truncate at the first colon
+# (which would break registry:port/owner/repo references).
+# ------------------------------------------------------------------
+echo ""
+echo "Running compose-parity image_name() regex tests..."
+echo ""
+
+# Inline the updated image_name() logic from compose-parity.sh so these tests
+# run without depending on a compose file on disk.
+_image_name_from_raw() {
+  local raw="$1"
+  printf '%s' "$raw" \
+    | sed -E "s/^[\"']//; s/[\"']$//" \
+    | sed -E 's/^\$\{[A-Za-z_][A-Za-z0-9_]*:-//; s/\}$//' \
+    | sed 's|:[^:/]*$||' \
+    | tr -d ' '
+}
+
+run_image_name_test() {
+  local name="$1" input="$2" expected="$3"
+  local got
+  got=$(_image_name_from_raw "$input")
+  if [[ "$got" == "$expected" ]]; then
+    echo "[OK] ${name}"
+    (( PASS++ )) || true
+  else
+    echo "[X] ${name}: expected='${expected}' got='${got}'"
+    (( FAIL++ )) || true
+  fi
+}
+
+# Plain image reference — tag stripped
+run_image_name_test \
+  "plain image: strip :tag" \
+  "ghcr.io/kaitranntt/ccs:latest" \
+  "ghcr.io/kaitranntt/ccs"
+
+# Env-var-with-default syntax — wrapper stripped, then tag stripped
+run_image_name_test \
+  "env-var default: strip wrapper and :tag" \
+  '${CCS_IMAGE:-ghcr.io/kaitranntt/ccs:latest}' \
+  "ghcr.io/kaitranntt/ccs"
+
+# Registry with port — internal colon preserved, only :tag stripped
+run_image_name_test \
+  "registry:port/owner/repo:tag — preserve internal colon" \
+  "registry.local:5000/owner/repo:tag" \
+  "registry.local:5000/owner/repo"
+
+# ------------------------------------------------------------------
+# compose-parity service-scoped extraction regression — reviewer guard
+#
+# Verifies the real compose-parity script does not read a later sidecar image
+# when services.ccs itself lacks an image.
+# ------------------------------------------------------------------
+echo ""
+echo "Running compose-parity scoped extraction tests..."
+echo ""
+
+COMPOSE_FIXTURE_DIR="$(mktemp -d)"
+CANONICAL_FIXTURE="${COMPOSE_FIXTURE_DIR}/compose.yaml"
+INTEGRATED_FIXTURE="${COMPOSE_FIXTURE_DIR}/integrated.yaml"
+
+cat > "$CANONICAL_FIXTURE" <<'YAML'
+services:
+  ccs:
+    ports:
+      - "3000:3000"
+      - "8317:8317"
+    volumes:
+      - ccs_home:/root/.ccs
+      - ccs_logs:/var/log/ccs
+    networks:
+      - ccs-net
+  sidecar:
+    image: ghcr.io/kaitranntt/ccs:latest
+volumes:
+  ccs_home:
+  ccs_logs:
+networks:
+  ccs-net:
+    name: ccs-net
+YAML
+
+cat > "$INTEGRATED_FIXTURE" <<'YAML'
+services:
+  ccs-cliproxy:
+    image: ccs-cliproxy:latest
+    ports:
+      - "3000:3000"
+      - "8317:8317"
+    volumes:
+      - ccs_home:/root/.ccs
+      - ccs_logs:/var/log/ccs
+volumes:
+  ccs_home:
+  ccs_logs:
+YAML
+
+actual_exit=0
+COMPOSE_PARITY_CANONICAL="$CANONICAL_FIXTURE" \
+  COMPOSE_PARITY_INTEGRATED="$INTEGRATED_FIXTURE" \
+  bash "${SCRIPT_DIR}/compose-parity.sh" > /dev/null 2>&1 || actual_exit=$?
+
+if [[ "$actual_exit" -ne 0 ]]; then
+  echo "[OK] compose-parity does not bleed into later sidecar image"
+  (( PASS++ )) || true
+else
+  echo "[X] compose-parity should fail when services.ccs lacks an image"
+  (( FAIL++ )) || true
+fi
 
 # ------------------------------------------------------------------
 # Summary
