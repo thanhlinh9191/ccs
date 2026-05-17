@@ -24,7 +24,7 @@ export class CodexProfileRegistryReadError extends Error {
   }
 }
 
-function validateRegistryData(parsed: unknown): CodexProfileData {
+export function validateCodexProfileRegistryData(parsed: unknown): CodexProfileData {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('registry YAML root is not an object');
   }
@@ -164,7 +164,7 @@ export class CodexProfileRegistry {
     }
     try {
       const raw = fs.readFileSync(this.registryPath, 'utf8');
-      return validateRegistryData(yaml.load(raw));
+      return validateCodexProfileRegistryData(yaml.load(raw));
     } catch (err) {
       const msg = safeRegistryReadMessage(err);
       const displayPath = registryDisplayPath(this.registryPath);
@@ -309,12 +309,15 @@ export class CodexProfileRegistry {
     });
   }
 
-  removeProfile(name: string): void {
+  removeProfile(name: string, options: { forceDefault?: boolean } = {}): void {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
       const data = this._read();
       if (!data.profiles[name]) {
         throw new Error(`Profile not found: ${name}`);
+      }
+      if (data.default === name && Object.keys(data.profiles).length > 1 && !options.forceDefault) {
+        throw new Error('Cannot remove default profile while other profiles exist without --force');
       }
       delete data.profiles[name];
       if (data.default === name) {

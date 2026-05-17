@@ -8,7 +8,7 @@
  * - response contains no token substrings
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -93,6 +93,7 @@ afterEach(async () => {
   delete process.env.CCS_HOME;
   delete process.env.CODEX_HOME;
   delete process.env.CCS_CODEX_PROFILE;
+  mock.restore();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -121,6 +122,43 @@ describe('GET /api/codex/profiles', () => {
 
     expect(status).toBe(500);
     expect((body as { error?: string }).error).toContain('could not be read safely');
+  });
+
+  it('returns 500 when a malformed registry appears after an empty response was cached', async () => {
+    const first = await get('/api/codex/profiles');
+    expect(first.status).toBe(200);
+
+    const registryPath = path.join(ccsDir, 'codex-profiles.yaml');
+    fs.writeFileSync(registryPath, '{ invalid: yaml: [', { mode: 0o600 });
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(registryPath, future, future);
+
+    const { status, body } = await get('/api/codex/profiles');
+
+    expect(status).toBe(500);
+    expect((body as { error?: string }).error).toContain('could not be read safely');
+  });
+
+  it('returns a sanitized 500 when registry stat fails', async () => {
+    const registryPath = path.join(ccsDir, 'codex-profiles.yaml');
+    const rawMessage = `EACCES: permission denied, stat '${registryPath}'`;
+    const realStatSync = fs.statSync;
+    spyOn(fs, 'statSync').mockImplementation((target) => {
+      if (target === registryPath) {
+        const err = new Error(rawMessage) as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realStatSync(target);
+    });
+
+    const { status, body } = await get('/api/codex/profiles');
+    const error = (body as { error?: string }).error ?? '';
+
+    expect(status).toBe(500);
+    expect(error).toContain('could not be checked safely');
+    expect(error).not.toContain(registryPath);
+    expect(error).not.toContain('EACCES');
   });
 
   it('returns 200 with decoded email and plan for a valid profile', async () => {

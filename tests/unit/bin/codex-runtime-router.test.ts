@@ -249,7 +249,7 @@ describe('codex-runtime router — non-auth profile resolution', () => {
 
     expect(code).toBe(1);
     expect(process.env.CODEX_HOME).toBeUndefined();
-    expect(stderr).toContain('not a valid YAML object');
+    expect(stderr).toContain('registry YAML root is not an object');
   });
 
   it('fails fast for structural resolver errors with the expected name', async () => {

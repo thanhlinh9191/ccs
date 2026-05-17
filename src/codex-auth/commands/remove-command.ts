@@ -90,7 +90,16 @@ export async function handleRemoveCodex(ctx: CodexCommandContext, args: string[]
   // Ghost case: dir already gone
   if (!dirExists) {
     process.stderr.write(`[!] Profile dir was already missing; removing registry entry only.\n`);
-    registry.removeProfile(profileName);
+    try {
+      registry.removeProfile(profileName, { forceDefault: force });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      exitWithError(
+        `Profile registry update failed; profile dir was already missing.\n  ${msg}`,
+        ExitCode.GENERAL_ERROR
+      );
+      return;
+    }
     console.log(ok(`Profile removed: ${profileName}`));
     return;
   }
@@ -146,7 +155,7 @@ export async function handleRemoveCodex(ctx: CodexCommandContext, args: string[]
   }
 
   try {
-    registry.removeProfile(profileName);
+    registry.removeProfile(profileName, { forceDefault: force });
   } catch (err) {
     const restored = _restoreProfileDir(stagedDeleteDir, profileDir);
     _removePathBestEffort(preservationDir);

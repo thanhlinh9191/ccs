@@ -9,6 +9,8 @@ import * as yaml from 'js-yaml';
 import { getCodexAuthRegistryPath, resolveCodexProfileDir } from './codex-profile-paths';
 import { getCcsDirSource } from '../utils/config-manager';
 import { getCodexProfileNameError } from './types';
+import { validateCodexProfileRegistryData } from './codex-profile-registry';
+import type { CodexProfileData } from './types';
 
 export interface ResolvedProfile {
   name: string;
@@ -21,12 +23,6 @@ export class CodexAuthProfileResolutionError extends Error {
     super(message);
     this.name = 'CodexAuthProfileResolutionError';
   }
-}
-
-interface RegistryShape {
-  version?: string;
-  default?: string | null;
-  profiles?: Record<string, unknown>;
 }
 
 function quoteDiagnosticValue(value: string): string {
@@ -117,19 +113,26 @@ export function resolveActiveProfile(env: NodeJS.ProcessEnv = process.env): Reso
     return null;
   }
 
-  let registry: RegistryShape;
+  let parsed: unknown;
   try {
     const raw = fs.readFileSync(registryPath, 'utf8');
-    const parsed = yaml.load(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      const msg = `registry at ${displayRegistryPath} is not a valid YAML object`;
-      resolutionFailure(msg, envName, displayEnvName);
-    }
-    registry = parsed as RegistryShape;
+    parsed = yaml.load(raw);
   } catch (err) {
     if (err instanceof CodexAuthProfileResolutionError) throw err;
     const msg = `registry YAML could not be parsed at ${displayRegistryPath}`;
     resolutionFailure(msg, envName, displayEnvName);
+  }
+
+  let registry: CodexProfileData;
+  try {
+    registry = validateCodexProfileRegistryData(parsed);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    resolutionFailure(
+      `registry at ${displayRegistryPath} is invalid: ${msg}`,
+      envName,
+      displayEnvName
+    );
   }
 
   const profiles = registry.profiles;
@@ -161,8 +164,8 @@ export function resolveActiveProfile(env: NodeJS.ProcessEnv = process.env): Reso
   }
 
   // F3: registry default
-  const defaultName = registry.default ?? null;
-  if (defaultName) {
+  const defaultName = registry.default;
+  if (defaultName !== null) {
     if (typeof defaultName !== 'string') {
       resolutionFailure(
         `registry default at ${displayRegistryPath} is not a valid profile name`,

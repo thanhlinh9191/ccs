@@ -95,7 +95,17 @@ describe('resolveActiveProfile', () => {
       mode: 0o600,
     });
 
-    expect(() => resolveActiveProfile({})).toThrow(/valid profiles map/);
+    expect(() => resolveActiveProfile({})).toThrow(/object profiles map/);
+  });
+
+  it('throws instead of falling back when registry default has an invalid falsy type', () => {
+    writeRegistry({
+      version: '1.0',
+      default: false,
+      profiles: {},
+    });
+
+    expect(() => resolveActiveProfile({})).toThrow(/default must be a string or null/i);
   });
 
   it('throws when CCS_CODEX_PROFILE contains an unsafe profile name', () => {
@@ -129,7 +139,7 @@ describe('resolveActiveProfile', () => {
       profiles: {},
     });
 
-    expect(() => resolveActiveProfile({})).toThrow(/default 'ghost' is missing/i);
+    expect(() => resolveActiveProfile({})).toThrow(/default profile is missing from profiles map/i);
   });
 
   it('throws when matched registry profile entry is malformed', () => {
@@ -141,7 +151,36 @@ describe('resolveActiveProfile', () => {
       },
     });
 
-    expect(() => resolveActiveProfile({})).toThrow(/not a valid object/i);
+    expect(() => resolveActiveProfile({})).toThrow(/profile "work" must be an object/i);
+  });
+
+  it('throws when a registry profile is missing required metadata', () => {
+    writeRegistry({
+      version: '1.0',
+      default: 'work',
+      profiles: {
+        work: { type: 'codex', last_used: null },
+      },
+    });
+
+    expect(() => resolveActiveProfile({})).toThrow(/created timestamp/i);
+  });
+
+  it('throws when a registry profile has invalid optional metadata types', () => {
+    writeRegistry({
+      version: '1.0',
+      default: 'work',
+      profiles: {
+        work: {
+          type: 'codex',
+          created: '2026-01-01T00:00:00.000Z',
+          last_used: null,
+          account_id: 123,
+        },
+      },
+    });
+
+    expect(() => resolveActiveProfile({})).toThrow(/account_id must be a string/i);
   });
 
   it('returns source=env when CCS_CODEX_PROFILE matches a registry entry', () => {

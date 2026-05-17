@@ -125,6 +125,49 @@ describe('handleRemoveCodex — default guard', () => {
     await handleRemoveCodex(ctx, ['alpha', '--force', '--yes']);
     expect(ctx.registry.hasProfile('alpha')).toBe(false);
   });
+
+  it('restores data when the target becomes default between precheck and registry write', async () => {
+    const { handleRemoveCodex } = await import(
+      '../../../../src/codex-auth/commands/remove-command'
+    );
+    const ctx = await makeCtx('alpha', 'beta');
+    ctx.registry.setDefault('beta');
+    const profileDir = path.join(ccsHome, '.ccs', 'codex-instances', 'alpha');
+    const authJsonPath = path.join(profileDir, 'auth.json');
+    fs.writeFileSync(authJsonPath, JSON.stringify({ tokens: { id_token: 'h.e30K.s' } }));
+
+    const realCpSync = fs.cpSync;
+    spyOn(fs, 'cpSync').mockImplementation((src, dest, options) => {
+      const result = realCpSync(src, dest, options);
+      if (typeof dest === 'string' && dest.includes('.preserved.')) {
+        ctx.registry.setDefault('alpha');
+      }
+      return result;
+    });
+
+    let exitCode = -1;
+    const origExit = process.exit;
+    const origErr = console.error;
+    process.exit = (code?: number) => {
+      exitCode = code ?? 0;
+      throw new Error('exit');
+    };
+    console.error = () => {};
+
+    try {
+      await handleRemoveCodex(ctx, ['alpha', '--yes']);
+    } catch {
+      /* process.exit */
+    } finally {
+      process.exit = origExit;
+      console.error = origErr;
+    }
+
+    expect(exitCode).toBeGreaterThan(0);
+    expect(fs.existsSync(authJsonPath)).toBe(true);
+    expect(ctx.registry.hasProfile('alpha')).toBe(true);
+    expect(ctx.registry.getDefault()).toBe('alpha');
+  });
 });
 
 // ── only profile → allows removal ────────────────────────────────────────────

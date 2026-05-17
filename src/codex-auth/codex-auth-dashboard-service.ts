@@ -9,10 +9,9 @@
  * fields (email, plan, accountId) are extracted from JWT. auth.json is
  * read/decoded and then discarded.
  *
- * Cache: 5-second in-memory single-key cache reduces fs reads during
- * dashboard polling. Out-of-process callers rely on the TTL. In-process
- * callers (Phase 2 CLI commands running in dev-server context) can call
- * invalidateCodexAuthProfilesCache() to force an immediate re-read.
+ * Cache: 5-second in-memory cache reduces full registry/auth reads during
+ * dashboard polling, but each call still stats the registry so corruption or
+ * edits are surfaced immediately instead of serving stale success.
  */
 
 import * as fs from 'fs';
@@ -53,7 +52,11 @@ export interface CodexAuthProfilesSummary {
 
 // ── Cache ───────────────────────────────────────────────────────────────────
 
-let cache: { value: CodexAuthProfilesSummary; expiresAt: number } | null = null;
+let cache: {
+  value: CodexAuthProfilesSummary;
+  expiresAt: number;
+  registrySignature: string;
+} | null = null;
 const TTL_MS = 5000;
 
 /**
@@ -66,6 +69,21 @@ export function invalidateCodexAuthProfilesCache(): void {
 }
 
 // ── Registry helpers ────────────────────────────────────────────────────────
+
+function getRegistryCacheSignature(): string {
+  const registryPath = getCodexAuthRegistryPath();
+  try {
+    const stat = fs.statSync(registryPath);
+    return ['present', stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+      return 'missing';
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn('codex-auth.dashboard.registry-stat-failed', `Registry stat failed: ${msg}`);
+    throw new Error('Codex auth profile registry could not be checked safely');
+  }
+}
 
 function readRegistry(): CodexProfileData {
   const registryPath = getCodexAuthRegistryPath();
@@ -225,10 +243,11 @@ async function buildSummary(): Promise<CodexAuthProfilesSummary> {
  */
 export async function getCodexAuthProfilesSummary(): Promise<CodexAuthProfilesSummary> {
   const now = Date.now();
-  if (cache && cache.expiresAt > now) {
+  const registrySignature = getRegistryCacheSignature();
+  if (cache && cache.expiresAt > now && cache.registrySignature === registrySignature) {
     return cache.value;
   }
   const value = await buildSummary();
-  cache = { value, expiresAt: now + TTL_MS };
+  cache = { value, expiresAt: now + TTL_MS, registrySignature };
   return value;
 }

@@ -6,7 +6,7 @@
  * and token redaction from response.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -71,6 +71,11 @@ function writeRegistry(registryPath: string, data: unknown): void {
   fs.writeFileSync(registryPath, yaml(data), { mode: 0o600 });
 }
 
+function bumpRegistryMtime(registryPath: string): void {
+  const future = new Date(Date.now() + 10_000);
+  fs.utimesSync(registryPath, future, future);
+}
+
 // Module cache helpers -----------------------------------------------------
 
 async function importService() {
@@ -100,6 +105,7 @@ afterEach(() => {
   delete process.env.CCS_HOME;
   delete process.env.CODEX_HOME;
   delete process.env.CCS_CODEX_PROFILE;
+  mock.restore();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -123,6 +129,34 @@ describe('getCodexAuthProfilesSummary', () => {
     fs.writeFileSync(registryPath, '{ invalid: yaml: [', { mode: 0o600 });
 
     await expect(getCodexAuthProfilesSummary()).rejects.toThrow(/could not be read safely/i);
+  });
+
+  it('does not expose raw stat errors when the registry cannot be checked', async () => {
+    const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await importService();
+    invalidateCodexAuthProfilesCache();
+
+    const registryPath = path.join(ccsDir, 'codex-profiles.yaml');
+    const rawMessage = `EACCES: permission denied, stat '${registryPath}'`;
+    const realStatSync = fs.statSync;
+    spyOn(fs, 'statSync').mockImplementation((target) => {
+      if (target === registryPath) {
+        const err = new Error(rawMessage) as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realStatSync(target);
+    });
+
+    let message = '';
+    try {
+      await getCodexAuthProfilesSummary();
+    } catch (err) {
+      message = String(err);
+    }
+
+    expect(message).toContain('could not be checked safely');
+    expect(message).not.toContain(registryPath);
+    expect(message).not.toContain('EACCES');
   });
 
   it('returns decoded email, plan, accountId for valid registry with 2 profiles', async () => {
@@ -357,7 +391,7 @@ describe('getCodexAuthProfilesSummary', () => {
     expect(result.active).toBeNull();
   });
 
-  it('returns cached value on second call within 5s (no extra fs reads)', async () => {
+  it('returns cached value on second call within 5s when the registry file is unchanged', async () => {
     const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await importService();
     invalidateCodexAuthProfilesCache();
 
@@ -373,14 +407,42 @@ describe('getCodexAuthProfilesSummary', () => {
     );
 
     const first = await getCodexAuthProfilesSummary();
-    // Modify registry after first call — should NOT be seen within cache TTL
+    const second = await getCodexAuthProfilesSummary();
+
+    // Both calls should return same reference (cache hit)
+    expect(second).toBe(first);
+  });
+
+  it('does not serve cached missing-registry success after a malformed registry appears', async () => {
+    const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await importService();
+    invalidateCodexAuthProfilesCache();
+
+    const first = await getCodexAuthProfilesSummary();
+    expect(first.profiles).toHaveLength(0);
+
+    const registryPath = path.join(ccsDir, 'codex-profiles.yaml');
+    fs.writeFileSync(registryPath, '{ invalid: yaml: [', { mode: 0o600 });
+    bumpRegistryMtime(registryPath);
+
+    await expect(getCodexAuthProfilesSummary()).rejects.toThrow(/could not be read safely/i);
+  });
+
+  it('does not serve cached valid-registry success after the registry becomes malformed', async () => {
+    const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await importService();
+    invalidateCodexAuthProfilesCache();
+
+    const registryPath = path.join(ccsDir, 'codex-profiles.yaml');
     fs.writeFileSync(registryPath, `version: "1.0"\ndefault: null\nprofiles: {}\n`, {
       mode: 0o600,
     });
 
-    const second = await getCodexAuthProfilesSummary();
-    // Both calls should return same reference (cache hit)
-    expect(second).toBe(first);
+    const first = await getCodexAuthProfilesSummary();
+    expect(first.profiles).toHaveLength(0);
+
+    fs.writeFileSync(registryPath, '{ invalid: yaml: [', { mode: 0o600 });
+    bumpRegistryMtime(registryPath);
+
+    await expect(getCodexAuthProfilesSummary()).rejects.toThrow(/could not be read safely/i);
   });
 
   it('invalidateCodexAuthProfilesCache forces re-read on next call', async () => {

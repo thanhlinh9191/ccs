@@ -10,7 +10,7 @@ let CodexProfileRegistry: new (registryPath?: string) => {
   createProfile(name: string, meta?: Record<string, unknown>): void;
   getProfile(name: string): Record<string, unknown>;
   updateProfile(name: string, partial: Record<string, unknown>): void;
-  removeProfile(name: string): void;
+  removeProfile(name: string, options?: { forceDefault?: boolean }): void;
   listProfiles(): string[];
   hasProfile(name: string): boolean;
   getDefault(): string | null;
@@ -128,13 +128,25 @@ describe('CodexProfileRegistry — remove', () => {
     expect(reg.getDefault()).toBeNull();
   });
 
-  it('does not promote another profile when the default profile is removed', () => {
+  it('refuses to remove the default profile when other profiles remain without force', () => {
     const reg = new CodexProfileRegistry(registryPath);
     reg.createProfile('work');
     reg.createProfile('personal');
     reg.setDefault('work');
 
-    reg.removeProfile('work');
+    expect(() => reg.removeProfile('work')).toThrow(/default profile.*without --force/i);
+
+    expect(reg.listProfiles()).toEqual(['work', 'personal']);
+    expect(reg.getDefault()).toBe('work');
+  });
+
+  it('does not promote another profile when the default profile is force removed', () => {
+    const reg = new CodexProfileRegistry(registryPath);
+    reg.createProfile('work');
+    reg.createProfile('personal');
+    reg.setDefault('work');
+
+    reg.removeProfile('work', { forceDefault: true });
 
     expect(reg.listProfiles()).toEqual(['personal']);
     expect(reg.getDefault()).toBeNull();
