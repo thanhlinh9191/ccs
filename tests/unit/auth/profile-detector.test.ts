@@ -97,6 +97,7 @@ describe('ProfileDetector', () => {
       expect(detector.detectProfileType('gitlab').provider).toBe('gitlab');
       expect(detector.detectProfileType('codebuddy').provider).toBe('codebuddy');
       expect(detector.detectProfileType('kilo').provider).toBe('kilo');
+      expect(detector.detectProfileType('qoder').provider).toBe('qoder');
     });
 
     it('should detect settings-based profile from unified config', () => {

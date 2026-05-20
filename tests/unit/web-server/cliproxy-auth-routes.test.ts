@@ -17,6 +17,7 @@ describe('cliproxy-auth-routes start-url guard', () => {
       "Provider 'codebuddy' uses Device Code flow"
     );
     expect(getStartUrlUnsupportedReason('kilo')).toContain("Provider 'kilo' uses Device Code flow");
+    expect(getStartUrlUnsupportedReason('qoder')).toContain("Provider 'qoder' uses Device Code flow");
   });
 
   it('allows Cursor browser URL auth on start-url', () => {

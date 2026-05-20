@@ -306,6 +306,13 @@ export const OAUTH_CONFIGS: Record<CLIProxyProvider, ProviderOAuthConfig> = {
     scopes: [],
     authFlag: '--kilo-login',
   },
+  qoder: {
+    provider: 'qoder',
+    displayName: 'Qoder',
+    authUrl: 'https://qoder.com/device/selectAccounts',
+    scopes: [],
+    authFlag: '--qoder-login',
+  },
 };
 
 /**

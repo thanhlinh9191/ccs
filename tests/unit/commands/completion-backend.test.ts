@@ -85,6 +85,7 @@ describe('completion backend', () => {
     expect(values).toContain('gitlab');
     expect(values).toContain('codebuddy');
     expect(values).toContain('kilo');
+    expect(values).toContain('qoder');
     expect(values).toContain('localglm');
     expect(values).toContain('work');
     expect(values).toContain('my-codex');

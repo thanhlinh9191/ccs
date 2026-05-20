@@ -182,6 +182,18 @@ export const PROVIDER_CAPABILITIES: Record<CLIProxyProvider, ProviderCapabilitie
     tokenTypeValues: ['kilo'],
     aliases: [],
   },
+  qoder: {
+    displayName: 'Qoder',
+    description: 'Qoder AI coding assistant',
+    oauthFlow: 'device_code',
+    callbackPort: null,
+    callbackProviderName: 'qoder',
+    authUrlProviderName: 'qoder',
+    refreshOwnership: 'unsupported',
+    authFilePrefixes: ['qoder-'],
+    tokenTypeValues: ['qoder'],
+    aliases: [],
+  },
 };
 
 export const CLIPROXY_PROVIDER_IDS = Object.freeze(

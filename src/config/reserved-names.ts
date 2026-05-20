@@ -16,6 +16,7 @@ export const RESERVED_PROFILE_NAMES = [
   'gitlab',
   'codebuddy',
   'kilo',
+  'qoder',
   // Copilot API (GitHub Copilot proxy)
   'copilot',
   // Cursor IDE (Cursor proxy daemon)

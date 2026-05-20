@@ -16,7 +16,8 @@ export type CLIProxyProvider =
   | 'cursor'
   | 'gitlab'
   | 'codebuddy'
-  | 'kilo';
+  | 'kilo'
+  | 'qoder';
 
 /** CLIProxy backend selection */
 export type CLIProxyBackend = 'original' | 'plus';
@@ -32,6 +33,7 @@ export const PLUS_ONLY_PROVIDERS: CLIProxyProvider[] = [
   'gitlab',
   'codebuddy',
   'kilo',
+  'qoder',
 ];
 
 /** Model mapping for each provider */

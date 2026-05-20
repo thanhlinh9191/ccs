@@ -205,6 +205,7 @@ export const BUILTIN_PROVIDER_SHORTCUTS: readonly ShortcutEntry[] = CLIPROXY_PRO
         gitlab: 'GitLab Duo via CLIProxy OAuth',
         codebuddy: 'CodeBuddy via CLIProxy OAuth',
         kilo: 'Kilo AI via CLIProxy OAuth',
+        qoder: 'Qoder AI via CLIProxy OAuth',
       }[name] || 'CLIProxy OAuth provider',
   })
 );
