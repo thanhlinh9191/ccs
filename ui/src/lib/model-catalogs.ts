@@ -454,6 +454,128 @@ export const MODEL_CATALOGS: Record<string, ProviderCatalog> = {
       },
     ],
   },
+  qoder: {
+    provider: 'qoder',
+    displayName: 'Qoder',
+    defaultModel: 'qoder/auto',
+    models: [
+      {
+        id: 'qoder/auto',
+        name: 'Qoder Auto',
+        description: 'Auto selects the best Qoder model for your prompt',
+        presetMapping: {
+          default: 'qoder/auto',
+          opus: 'qoder/auto',
+          sonnet: 'qoder/auto',
+          haiku: 'qoder/auto',
+        },
+      },
+      {
+        id: 'qoder/ultimate',
+        name: 'Qoder Ultimate',
+        description: 'Highest quality Qoder tier',
+        presetMapping: {
+          default: 'qoder/ultimate',
+          opus: 'qoder/ultimate',
+          sonnet: 'qoder/ultimate',
+          haiku: 'qoder/ultimate',
+        },
+      },
+      {
+        id: 'qoder/performance',
+        name: 'Qoder Performance',
+        description: 'Balanced quality and speed',
+        presetMapping: {
+          default: 'qoder/performance',
+          opus: 'qoder/performance',
+          sonnet: 'qoder/performance',
+          haiku: 'qoder/performance',
+        },
+      },
+      {
+        id: 'qoder/efficient',
+        name: 'Qoder Efficient',
+        description: 'Cost-efficient Qoder tier',
+        presetMapping: {
+          default: 'qoder/efficient',
+          opus: 'qoder/efficient',
+          sonnet: 'qoder/efficient',
+          haiku: 'qoder/efficient',
+        },
+      },
+      {
+        id: 'qoder/lite',
+        name: 'Qoder Lite',
+        description: 'Fastest and most affordable Qoder tier',
+        presetMapping: {
+          default: 'qoder/lite',
+          opus: 'qoder/lite',
+          sonnet: 'qoder/lite',
+          haiku: 'qoder/lite',
+        },
+      },
+      {
+        id: 'qoder/qmodel',
+        name: 'Qwen 3.6 Plus (via Qoder)',
+        description: 'Qwen 3.6 Plus frontier model',
+        presetMapping: {
+          default: 'qoder/qmodel',
+          opus: 'qoder/qmodel',
+          sonnet: 'qoder/qmodel',
+          haiku: 'qoder/qmodel',
+        },
+      },
+      {
+        id: 'qoder/dmodel',
+        name: 'DeepSeek V4 Pro (via Qoder)',
+        description: 'DeepSeek V4 Pro frontier model',
+        presetMapping: {
+          default: 'qoder/dmodel',
+          opus: 'qoder/dmodel',
+          sonnet: 'qoder/dmodel',
+          haiku: 'qoder/dfmodel',
+        },
+      },
+      {
+        id: 'qoder/dfmodel',
+        name: 'DeepSeek V4 Flash (via Qoder)',
+        description: 'DeepSeek V4 Flash frontier model',
+      },
+      {
+        id: 'qoder/gm51model',
+        name: 'GLM 5.1 (via Qoder)',
+        description: 'GLM 5.1 frontier model',
+        presetMapping: {
+          default: 'qoder/gm51model',
+          opus: 'qoder/gm51model',
+          sonnet: 'qoder/gm51model',
+          haiku: 'qoder/gm51model',
+        },
+      },
+      {
+        id: 'qoder/kmodel',
+        name: 'Kimi K2.6 (via Qoder)',
+        description: 'Kimi K2.6 frontier model',
+        presetMapping: {
+          default: 'qoder/kmodel',
+          opus: 'qoder/kmodel',
+          sonnet: 'qoder/kmodel',
+          haiku: 'qoder/kmodel',
+        },
+      },
+      {
+        id: 'qoder/mmodel',
+        name: 'MiniMax M2.7 (via Qoder)',
+        description: 'MiniMax M2.7 frontier model',
+        presetMapping: {
+          default: 'qoder/mmodel',
+          opus: 'qoder/mmodel',
+          sonnet: 'qoder/mmodel',
+          haiku: 'qoder/mmodel',
+        },
+      },
+    ],
+  },
   kimi: {
     provider: 'kimi',
     displayName: 'Kimi (Moonshot)',

@@ -265,6 +265,68 @@ export const MODEL_CATALOG: Partial<Record<CLIProxyProvider, ProviderCatalog>> =
       },
     ],
   },
+  qoder: {
+    provider: 'qoder',
+    displayName: 'Qoder',
+    defaultModel: 'qoder/auto',
+    models: [
+      {
+        id: 'qoder/auto',
+        name: 'Qoder Auto',
+        description: 'Auto selects the best Qoder model for your prompt',
+      },
+      {
+        id: 'qoder/ultimate',
+        name: 'Qoder Ultimate',
+        description: 'Highest quality Qoder tier',
+      },
+      {
+        id: 'qoder/performance',
+        name: 'Qoder Performance',
+        description: 'Balanced quality and speed',
+      },
+      {
+        id: 'qoder/efficient',
+        name: 'Qoder Efficient',
+        description: 'Cost-efficient Qoder tier',
+      },
+      {
+        id: 'qoder/lite',
+        name: 'Qoder Lite',
+        description: 'Fastest and most affordable Qoder tier',
+      },
+      {
+        id: 'qoder/qmodel',
+        name: 'Qwen 3.6 Plus (via Qoder)',
+        description: 'Qwen 3.6 Plus frontier model',
+      },
+      {
+        id: 'qoder/dmodel',
+        name: 'DeepSeek V4 Pro (via Qoder)',
+        description: 'DeepSeek V4 Pro frontier model',
+      },
+      {
+        id: 'qoder/dfmodel',
+        name: 'DeepSeek V4 Flash (via Qoder)',
+        description: 'DeepSeek V4 Flash frontier model',
+      },
+      {
+        id: 'qoder/gm51model',
+        name: 'GLM 5.1 (via Qoder)',
+        description: 'GLM 5.1 frontier model',
+      },
+      {
+        id: 'qoder/kmodel',
+        name: 'Kimi K2.6 (via Qoder)',
+        description: 'Kimi K2.6 frontier model',
+      },
+      {
+        id: 'qoder/mmodel',
+        name: 'MiniMax M2.7 (via Qoder)',
+        description: 'MiniMax M2.7 frontier model',
+      },
+    ],
+  },
   kimi: {
     provider: 'kimi',
     displayName: 'Kimi (Moonshot)',
