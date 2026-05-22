@@ -95,6 +95,25 @@ const SUBCOMMAND_SESSION_ONLY_VALUE_FLAGS = new Set<string>([
 ]);
 
 /**
+ * Flags that look session-only but are actually accepted by specific Claude
+ * subcommands. Keep these intact instead of stripping. Sourced from
+ * `claude <sub> --help` (v2.1.139); add new entries when upstream extends a
+ * subcommand parser.
+ *
+ * - `agents` accepts `--permission-mode`, `--dangerously-skip-permissions`,
+ *   and `--allow-dangerously-skip-permissions` as defaults for dispatched
+ *   sessions (see `claude agents --help`). Stripping these breaks
+ *   `ccs <profile> agents --permission-mode bypassPermissions`.
+ */
+const SUBCOMMAND_ALLOWED_SESSION_FLAGS: Record<string, ReadonlySet<string>> = {
+  agents: new Set<string>([
+    '--allow-dangerously-skip-permissions',
+    '--dangerously-skip-permissions',
+    '--permission-mode',
+  ]),
+};
+
+/**
  * Returns true when `args` look like a Claude subcommand invocation.
  *
  * Heuristic:
@@ -108,9 +127,19 @@ const SUBCOMMAND_SESSION_ONLY_VALUE_FLAGS = new Set<string>([
  * the rest of the line belongs to that subcommand.
  */
 export function isClaudeSubcommandInvocation(args: readonly string[]): boolean {
+  return getClaudeSubcommandName(args) !== null;
+}
+
+/**
+ * Returns the Claude subcommand name when `args` look like a subcommand
+ * invocation, otherwise null. Uses the same scan as
+ * `isClaudeSubcommandInvocation` so callers can branch on the specific
+ * subcommand (e.g. `agents` allows flags that other subcommands reject).
+ */
+export function getClaudeSubcommandName(args: readonly string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === '--') return false;
+    if (arg === '--') return null;
 
     if (arg.startsWith('-')) {
       if (VALUE_TAKING_FLAGS.has(arg)) {
@@ -124,29 +153,44 @@ export function isClaudeSubcommandInvocation(args: readonly string[]): boolean {
       continue;
     }
 
-    return CLAUDE_SUBCOMMANDS.has(arg);
+    return CLAUDE_SUBCOMMANDS.has(arg) ? arg : null;
   }
 
-  return false;
+  return null;
 }
 
 export function stripClaudeSubcommandSessionArgs(args: readonly string[]): string[] {
-  if (!isClaudeSubcommandInvocation(args)) {
+  const subcommand = getClaudeSubcommandName(args);
+  if (subcommand === null) {
     return [...args];
   }
+
+  const allowed = SUBCOMMAND_ALLOWED_SESSION_FLAGS[subcommand];
+  const isAllowed = (flag: string): boolean => allowed?.has(flag) === true;
 
   const out: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (SUBCOMMAND_SESSION_ONLY_FLAGS.has(arg)) {
+    if (SUBCOMMAND_SESSION_ONLY_FLAGS.has(arg) && !isAllowed(arg)) {
       continue;
     }
 
-    if (arg.startsWith('--permission-mode=') || arg.startsWith('--teammate-mode=')) {
+    if (arg.startsWith('--permission-mode=')) {
+      if (isAllowed('--permission-mode')) {
+        out.push(arg);
+        continue;
+      }
+      continue;
+    }
+    if (arg.startsWith('--teammate-mode=')) {
+      if (isAllowed('--teammate-mode')) {
+        out.push(arg);
+        continue;
+      }
       continue;
     }
 
-    if (SUBCOMMAND_SESSION_ONLY_VALUE_FLAGS.has(arg)) {
+    if (SUBCOMMAND_SESSION_ONLY_VALUE_FLAGS.has(arg) && !isAllowed(arg)) {
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith('-')) {
         i += 1;
