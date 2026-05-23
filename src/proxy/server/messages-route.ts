@@ -1,4 +1,5 @@
 import * as http from 'http';
+import { Agent } from 'undici';
 import type { Dispatcher } from 'undici';
 import type { OpenAICompatProfileConfig } from '../profile-router';
 import { resolveProxyRequestRoute } from '../request-router';
@@ -267,13 +268,29 @@ export async function handleProxyMessagesRequest(
       }
     );
 
+    const useSharedInsecureDispatcher =
+      insecureDispatcher !== undefined &&
+      upstream.route.profile.profileName === profile.profileName;
+    const useProfileInsecureTls = upstream.route.profile.insecure === true;
+    const ephemeralInsecureDispatcher =
+      useProfileInsecureTls && !useSharedInsecureDispatcher
+        ? new Agent({ connect: { rejectUnauthorized: false } })
+        : undefined;
+    const dispatcher = useSharedInsecureDispatcher
+      ? insecureDispatcher
+      : useProfileInsecureTls
+        ? ephemeralInsecureDispatcher
+        : undefined;
+
     try {
       logger.stage('dispatch', 'upstream.dispatch', 'Dispatching upstream fetch', {
         profileName: profile.profileName,
+        routedProfileName: upstream.route.profile.profileName,
+        insecureTls: dispatcher !== undefined,
       });
       const upstreamResponse = await fetch(
         resolveOpenAIChatCompletionsUrl(upstream.route.profile.baseUrl),
-        buildFetchInit(upstream.route.profile, upstream.body, controller.signal, insecureDispatcher)
+        buildFetchInit(upstream.route.profile, upstream.body, controller.signal, dispatcher)
       );
       logger.stage('upstream', 'upstream.response', 'Received upstream response', {
         profileName: profile.profileName,
@@ -288,6 +305,23 @@ export async function handleProxyMessagesRequest(
     } finally {
       clearTimeout(timeout);
       cleanupDisconnectHandlers();
+      if (ephemeralInsecureDispatcher) {
+        try {
+          await ephemeralInsecureDispatcher.close();
+        } catch (closeError) {
+          logger.stage(
+            'cleanup',
+            'request.dispatcher_close_failed',
+            'Failed to close per-request insecure dispatcher',
+            {
+              profileName: profile.profileName,
+              routedProfileName: upstream.route.profile.profileName,
+              error: closeError instanceof Error ? closeError.message : String(closeError),
+            },
+            { level: 'warn' }
+          );
+        }
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown proxy error';

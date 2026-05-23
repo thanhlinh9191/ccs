@@ -40,6 +40,7 @@ import {
   getModelsUsed,
   getProviderModelKey,
 } from './model-identity';
+import { annotateUsageProfile, filterByProfile } from './profile-filter';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { listAccountInstancePaths } from '../../management/instance-directory';
 
@@ -146,12 +147,16 @@ function finalizeHourlyUsage(hour: HourlyUsage): HourlyUsage {
  * Merge daily usage data from multiple sources
  * Combines entries with same date by aggregating tokens
  */
-export function mergeDailyData(sources: DailyUsage[][]): DailyUsage[] {
+export function mergeDailyData(
+  sources: DailyUsage[][],
+  options: { preserveProfile?: boolean } = {}
+): DailyUsage[] {
   const dateMap = new Map<string, DailyUsage>();
 
   for (const source of sources) {
     for (const day of source) {
-      const existing = dateMap.get(day.date);
+      const mergeKey = options.preserveProfile ? `${day.profile ?? ''}\u0000${day.date}` : day.date;
+      const existing = dateMap.get(mergeKey);
       if (existing) {
         // Aggregate tokens for same date
         existing.inputTokens += day.inputTokens;
@@ -178,8 +183,9 @@ export function mergeDailyData(sources: DailyUsage[][]): DailyUsage[] {
       } else {
         // Clone to avoid mutating original
         const modelBreakdowns = day.modelBreakdowns.map((b) => ({ ...b }));
-        dateMap.set(day.date, {
+        dateMap.set(mergeKey, {
           ...day,
+          ...(options.preserveProfile && day.profile ? { profile: day.profile } : {}),
           modelsUsed: getModelsUsed(modelBreakdowns),
           modelBreakdowns,
         });
@@ -195,12 +201,18 @@ export function mergeDailyData(sources: DailyUsage[][]): DailyUsage[] {
 /**
  * Merge monthly usage data from multiple sources
  */
-export function mergeMonthlyData(sources: MonthlyUsage[][]): MonthlyUsage[] {
+export function mergeMonthlyData(
+  sources: MonthlyUsage[][],
+  options: { preserveProfile?: boolean } = {}
+): MonthlyUsage[] {
   const monthMap = new Map<string, MonthlyUsage>();
 
   for (const source of sources) {
     for (const month of source) {
-      const existing = monthMap.get(month.month);
+      const mergeKey = options.preserveProfile
+        ? `${month.profile ?? ''}\u0000${month.month}`
+        : month.month;
+      const existing = monthMap.get(mergeKey);
       if (existing) {
         existing.inputTokens += month.inputTokens;
         existing.outputTokens += month.outputTokens;
@@ -224,8 +236,9 @@ export function mergeMonthlyData(sources: MonthlyUsage[][]): MonthlyUsage[] {
         }
       } else {
         const modelBreakdowns = month.modelBreakdowns.map((breakdown) => ({ ...breakdown }));
-        monthMap.set(month.month, {
+        monthMap.set(mergeKey, {
           ...month,
+          ...(options.preserveProfile && month.profile ? { profile: month.profile } : {}),
           modelsUsed: getModelsUsed(modelBreakdowns),
           modelBreakdowns,
         });
@@ -242,12 +255,18 @@ export function mergeMonthlyData(sources: MonthlyUsage[][]): MonthlyUsage[] {
  * Merge hourly usage data from multiple sources
  * Combines entries with same hour by aggregating tokens
  */
-export function mergeHourlyData(sources: HourlyUsage[][]): HourlyUsage[] {
+export function mergeHourlyData(
+  sources: HourlyUsage[][],
+  options: { preserveProfile?: boolean } = {}
+): HourlyUsage[] {
   const hourMap = new Map<string, HourlyUsage>();
 
   for (const source of sources) {
     for (const hour of source) {
-      const existing = hourMap.get(hour.hour);
+      const mergeKey = options.preserveProfile
+        ? `${hour.profile ?? ''}\u0000${hour.hour}`
+        : hour.hour;
+      const existing = hourMap.get(mergeKey);
       if (existing) {
         existing.inputTokens += hour.inputTokens;
         existing.outputTokens += hour.outputTokens;
@@ -273,8 +292,9 @@ export function mergeHourlyData(sources: HourlyUsage[][]): HourlyUsage[] {
         }
       } else {
         const modelBreakdowns = hour.modelBreakdowns.map((b) => ({ ...b }));
-        hourMap.set(hour.hour, {
+        hourMap.set(mergeKey, {
           ...hour,
+          ...(options.preserveProfile && hour.profile ? { profile: hour.profile } : {}),
           modelsUsed: getModelsUsed(modelBreakdowns),
           modelBreakdowns,
           requestCount: getHourlyRequestCount(hour),
@@ -393,7 +413,10 @@ async function refreshFromSource(): Promise<{
   await syncCliproxyUsage();
 
   // Load canonical default data and avoid counting the active instance twice
-  const defaultData = await loadAllUsageData({ projectsDir: getDefaultProjectsDirForAnalytics() });
+  const defaultData = annotateUsageProfile(
+    await loadAllUsageData({ projectsDir: getDefaultProjectsDirForAnalytics() }),
+    'default'
+  );
 
   // Load data from all CCS instances sequentially
   const instancePaths = getInstancePaths();
@@ -406,7 +429,10 @@ async function refreshFromSource(): Promise<{
 
   for (const instancePath of instancePaths) {
     try {
-      const data = await loadInstanceData(instancePath);
+      const data = annotateUsageProfile(
+        await loadInstanceData(instancePath),
+        path.basename(instancePath)
+      );
       instanceDataResults.push(data);
     } catch (err) {
       const instanceName = path.basename(instancePath);
@@ -471,9 +497,9 @@ async function refreshFromSource(): Promise<{
   }
 
   // Merge all data sources
-  const daily = mergeDailyData(allDailySources);
-  const hourly = mergeHourlyData(allHourlySources);
-  const monthly = mergeMonthlyData(allMonthlySources);
+  const daily = mergeDailyData(allDailySources, { preserveProfile: true });
+  const hourly = mergeHourlyData(allHourlySources, { preserveProfile: true });
+  const monthly = mergeMonthlyData(allMonthlySources, { preserveProfile: true });
   const session = mergeSessionData(allSessionSources);
 
   // Update in-memory cache
@@ -602,31 +628,35 @@ async function getCachedData<T>(key: string, ttl: number, loader: () => Promise<
 }
 
 /** Cached loader for daily usage data */
-export async function getCachedDailyData(): Promise<DailyUsage[]> {
-  return getCachedData('daily', CACHE_TTL.daily, async () => {
+export async function getCachedDailyData(profile?: string): Promise<DailyUsage[]> {
+  const data = await getCachedData('daily', CACHE_TTL.daily, async () => {
     return (await refreshFromSourceCoalesced()).daily;
   });
+  return mergeDailyData([filterByProfile(data, profile)]);
 }
 
 /** Cached loader for monthly usage data */
-export async function getCachedMonthlyData(): Promise<MonthlyUsage[]> {
-  return getCachedData('monthly', CACHE_TTL.monthly, async () => {
+export async function getCachedMonthlyData(profile?: string): Promise<MonthlyUsage[]> {
+  const data = await getCachedData('monthly', CACHE_TTL.monthly, async () => {
     return (await refreshFromSourceCoalesced()).monthly;
   });
+  return mergeMonthlyData([filterByProfile(data, profile)]);
 }
 
 /** Cached loader for session data */
-export async function getCachedSessionData(): Promise<SessionUsage[]> {
-  return getCachedData('session', CACHE_TTL.session, async () => {
+export async function getCachedSessionData(profile?: string): Promise<SessionUsage[]> {
+  const data = await getCachedData('session', CACHE_TTL.session, async () => {
     return (await refreshFromSourceCoalesced()).session;
   });
+  return filterByProfile(data, profile);
 }
 
 /** Cached loader for hourly usage data */
-export async function getCachedHourlyData(): Promise<HourlyUsage[]> {
-  return getCachedData('hourly', CACHE_TTL.daily, async () => {
+export async function getCachedHourlyData(profile?: string): Promise<HourlyUsage[]> {
+  const data = await getCachedData('hourly', CACHE_TTL.daily, async () => {
     return (await refreshFromSourceCoalesced()).hourly;
   });
+  return mergeHourlyData([filterByProfile(data, profile)]);
 }
 
 /**

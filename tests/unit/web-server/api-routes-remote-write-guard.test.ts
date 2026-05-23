@@ -20,6 +20,7 @@ describe('api-routes remote write guard', () => {
   let tempHome = '';
   let originalDashboardAuthEnabled: string | undefined;
   let originalCcsHome: string | undefined;
+  let originalCodexHome: string | undefined;
 
   beforeAll(async () => {
     const app = express();
@@ -53,8 +54,10 @@ describe('api-routes remote write guard', () => {
   beforeEach(() => {
     originalDashboardAuthEnabled = process.env.CCS_DASHBOARD_AUTH_ENABLED;
     originalCcsHome = process.env.CCS_HOME;
+    originalCodexHome = process.env.CODEX_HOME;
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-routes-remote-write-guard-'));
     process.env.CCS_HOME = tempHome;
+    process.env.CODEX_HOME = path.join(tempHome, '.codex');
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
     forcedRemoteAddress = '10.10.0.24';
   });
@@ -70,6 +73,12 @@ describe('api-routes remote write guard', () => {
       process.env.CCS_HOME = originalCcsHome;
     } else {
       delete process.env.CCS_HOME;
+    }
+
+    if (originalCodexHome !== undefined) {
+      process.env.CODEX_HOME = originalCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
     }
 
     if (tempHome && fs.existsSync(tempHome)) {
@@ -97,6 +106,44 @@ describe('api-routes remote write guard', () => {
     const response = await fetch(`${baseUrl}/api/codex/diagnostics`);
 
     expect(response.status).toBe(200);
+  });
+
+  it('redacts sensitive Codex diagnostics data while preserving remote access', async () => {
+    const codexHome = process.env.CODEX_HOME;
+    if (!codexHome) throw new Error('CODEX_HOME was not initialized');
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      `model_provider = "private"
+
+[model_providers.private]
+base_url = "https://llm.internal.example.test/v1/responses?tenant=alpha"
+env_key = "PRIVATE_PROVIDER_TOKEN"
+wire_api = "responses"
+
+[projects."/Users/someone/CloudPersonal/private-workspace"]
+trust_level = "trusted"
+`
+    );
+
+    const response = await fetch(`${baseUrl}/api/codex/diagnostics`);
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(body.config.projectTrust).toEqual([
+      { path: 'private-workspace', trustLevel: 'trusted' },
+    ]);
+    expect(body.config.modelProviders).toEqual([
+      expect.objectContaining({
+        name: 'private',
+        baseUrl: '[redacted:https]',
+        envKey: '[set]',
+      }),
+    ]);
+    expect(serialized).not.toContain('/Users/someone');
+    expect(serialized).not.toContain('llm.internal.example.test');
+    expect(serialized).not.toContain('PRIVATE_PROVIDER_TOKEN');
   });
 
   it('blocks remote profile creation when dashboard auth is disabled', async () => {

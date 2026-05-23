@@ -15,6 +15,8 @@ describe('parseCodexEffort', () => {
     expect(parseCodexEffort('gpt-5.4-fast-high')).toBe('high');
     expect(parseCodexEffort('gpt-5.3-codex-xhigh')).toBe('xhigh');
     expect(parseCodexEffort('gpt-5-mini-medium')).toBe('medium');
+    expect(parseCodexEffort('gpt-5.5-low')).toBe('low');
+    expect(parseCodexEffort('gpt-5.5-minimal')).toBe('minimal');
   });
 
   it('parses mixed-case suffixes', () => {
@@ -23,7 +25,6 @@ describe('parseCodexEffort', () => {
 
   it('returns undefined for unsuffixed or unsupported values', () => {
     expect(parseCodexEffort('gpt-5.3-codex')).toBeUndefined();
-    expect(parseCodexEffort('gpt-5.3-codex-low')).toBeUndefined();
     expect(parseCodexEffort('gpt-5.4-fast')).toBeUndefined();
     expect(parseCodexEffort(undefined)).toBeUndefined();
   });
@@ -69,12 +70,16 @@ describe('codex effort helpers', () => {
   it('builds ordered codex effort variants up to the supported max level', () => {
     expect(getCodexEffortVariants('gpt-5.3-codex', 'xhigh')).toEqual([
       'gpt-5.3-codex',
+      'gpt-5.3-codex-minimal',
+      'gpt-5.3-codex-low',
       'gpt-5.3-codex-medium',
       'gpt-5.3-codex-high',
       'gpt-5.3-codex-xhigh',
     ]);
     expect(getCodexEffortVariants('gpt-5.4-mini', 'high')).toEqual([
       'gpt-5.4-mini',
+      'gpt-5.4-mini-minimal',
+      'gpt-5.4-mini-low',
       'gpt-5.4-mini-medium',
       'gpt-5.4-mini-high',
     ]);
@@ -84,6 +89,10 @@ describe('codex effort helpers', () => {
     expect(getCodexEffortVariants('gpt-5.4', 'high', ['fast'])).toEqual([
       'gpt-5.4',
       'gpt-5.4-fast',
+      'gpt-5.4-minimal',
+      'gpt-5.4-minimal-fast',
+      'gpt-5.4-low',
+      'gpt-5.4-low-fast',
       'gpt-5.4-medium',
       'gpt-5.4-medium-fast',
       'gpt-5.4-high',

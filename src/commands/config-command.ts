@@ -12,6 +12,7 @@ import { startServer } from '../web-server';
 import { setupGracefulShutdown } from '../web-server/shutdown';
 import { ensureCliproxyService } from '../cliproxy/service-manager';
 import { resolveLifecyclePort } from '../cliproxy/config/port-manager';
+import { isRunningUnderSupervisord } from '../docker/supervisord-lifecycle';
 import { initUI, header, ok, info, warn, fail } from '../utils/ui';
 import { resolveNamedCommand, type NamedCommandRoute } from './named-command-router';
 import {
@@ -63,6 +64,7 @@ interface ConfigCommandDependencies {
   startServer: typeof startServer;
   setupGracefulShutdown: typeof setupGracefulShutdown;
   ensureCliproxyService: typeof ensureCliproxyService;
+  isRunningUnderSupervisord?: typeof isRunningUnderSupervisord;
   getDashboardAuthConfig: typeof getDashboardAuthConfig;
   initUI: typeof initUI;
   header: typeof header;
@@ -80,6 +82,7 @@ const defaultConfigCommandDependencies: ConfigCommandDependencies = {
   startServer,
   setupGracefulShutdown,
   ensureCliproxyService,
+  isRunningUnderSupervisord,
   getDashboardAuthConfig,
   initUI,
   header,
@@ -135,29 +138,37 @@ export async function handleConfigCommand(
   console.log(deps.header('CCS Config Dashboard'));
   console.log('');
 
-  // Ensure CLIProxy service is running for dashboard features
-  console.log(deps.info('Starting CLIProxy service...'));
-  const cliproxyResult = await deps.ensureCliproxyService(resolveLifecyclePort(), verbose);
-  logger.info('cliproxy.ensure_result', 'Config command checked CLIProxy availability', {
-    started: cliproxyResult.started,
-    alreadyRunning: cliproxyResult.alreadyRunning,
-    configRegenerated: cliproxyResult.configRegenerated,
-    port: cliproxyResult.port || null,
-    error: cliproxyResult.error || null,
-  });
+  const lifecyclePort = resolveLifecyclePort();
+  if (deps.isRunningUnderSupervisord?.() ?? false) {
+    logger.info('cliproxy.supervisord_managed', 'Skipping direct CLIProxy startup in Docker', {
+      port: lifecyclePort,
+    });
+    console.log(deps.info(`CLIProxy is managed by supervisord on port ${lifecyclePort}`));
+  } else {
+    // Ensure CLIProxy service is running for dashboard features
+    console.log(deps.info('Starting CLIProxy service...'));
+    const cliproxyResult = await deps.ensureCliproxyService(lifecyclePort, verbose);
+    logger.info('cliproxy.ensure_result', 'Config command checked CLIProxy availability', {
+      started: cliproxyResult.started,
+      alreadyRunning: cliproxyResult.alreadyRunning,
+      configRegenerated: cliproxyResult.configRegenerated,
+      port: cliproxyResult.port || null,
+      error: cliproxyResult.error || null,
+    });
 
-  if (cliproxyResult.started) {
-    if (cliproxyResult.alreadyRunning) {
-      console.log(deps.ok(`CLIProxy already running on port ${cliproxyResult.port}`));
-      if (cliproxyResult.configRegenerated) {
-        console.log(deps.warn('Config updated - restart CLIProxy to apply changes'));
+    if (cliproxyResult.started) {
+      if (cliproxyResult.alreadyRunning) {
+        console.log(deps.ok(`CLIProxy already running on port ${cliproxyResult.port}`));
+        if (cliproxyResult.configRegenerated) {
+          console.log(deps.warn('Config updated - restart CLIProxy to apply changes'));
+        }
+      } else {
+        console.log(deps.ok(`CLIProxy started on port ${cliproxyResult.port}`));
       }
     } else {
-      console.log(deps.ok(`CLIProxy started on port ${cliproxyResult.port}`));
+      console.log(deps.warn(`CLIProxy not available: ${cliproxyResult.error}`));
+      console.log(deps.info('Dashboard will work but Control Panel/Stats may be limited'));
     }
-  } else {
-    console.log(deps.warn(`CLIProxy not available: ${cliproxyResult.error}`));
-    console.log(deps.info('Dashboard will work but Control Panel/Stats may be limited'));
   }
   console.log('');
 

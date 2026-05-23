@@ -90,6 +90,30 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function redactCodexProviderBaseUrl(baseUrl: string | null): string | null {
+  if (!baseUrl) return null;
+
+  try {
+    const parsed = new URL(baseUrl);
+    const scheme = parsed.protocol.replace(/:$/, '') || 'url';
+    return `[redacted:${scheme}]`;
+  } catch {
+    return '[redacted:url]';
+  }
+}
+
+function redactCodexProviderEnvKey(name: string, envKey: string | null): string | null {
+  if (!envKey) return null;
+  return isBuiltInCodexModelProvider(name) ? envKey : '[set]';
+}
+
+function redactCodexProjectPath(projectPath: string): string {
+  const normalized = projectPath.trim().replace(/[\\/]+$/, '');
+  if (!normalized) return '[unknown]';
+  const basename = normalized.split(/[\\/]/).filter(Boolean).pop();
+  return basename || '[root]';
+}
+
 function hasOwn(obj: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
@@ -567,8 +591,8 @@ export function summarizeCodexModelProviders(value: unknown): CodexModelProvider
 
       return {
         name,
-        baseUrl: asString(provider.base_url),
-        envKey: asString(provider.env_key),
+        baseUrl: redactCodexProviderBaseUrl(asString(provider.base_url)),
+        envKey: redactCodexProviderEnvKey(name, asString(provider.env_key)),
         wireApi: asString(provider.wire_api),
         requiresOpenaiAuth: provider.requires_openai_auth === true,
         supportsWebsockets: provider.supports_websockets === true,
@@ -622,7 +646,10 @@ export function summarizeCodexProjectTrust(value: unknown): CodexProjectTrustDia
       const project = asObject(projectValue);
       const trustLevel = project ? asString(project.trust_level) : null;
       if (!trustLevel) return null;
-      return { path: projectPath, trustLevel } satisfies CodexProjectTrustDiagnostics;
+      return {
+        path: redactCodexProjectPath(projectPath),
+        trustLevel,
+      } satisfies CodexProjectTrustDiagnostics;
     })
     .filter((project): project is CodexProjectTrustDiagnostics => project !== null)
     .sort((left, right) => left.path.localeCompare(right.path));

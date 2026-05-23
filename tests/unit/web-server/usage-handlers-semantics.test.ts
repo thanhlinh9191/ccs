@@ -58,8 +58,12 @@ cliproxy_server:
 }
 
 function writeAssistantEntries(entries: AssistantFixture[]): void {
+  writeAssistantEntriesToDir(claudeDir, entries);
+}
+
+function writeAssistantEntriesToDir(baseClaudeDir: string, entries: AssistantFixture[]): void {
   for (const entry of entries) {
-    const projectDir = path.join(claudeDir, 'projects', entry.project);
+    const projectDir = path.join(baseClaudeDir, 'projects', entry.project);
     fs.mkdirSync(projectDir, { recursive: true });
 
     const line = JSON.stringify({
@@ -319,6 +323,95 @@ describe('usage handlers semantics', () => {
         expect.objectContaining({ model: 'claude-sonnet-4-5', tokens: 100, percentage: 50 }),
         expect.objectContaining({ model: 'gemini-2.5-pro', tokens: 100, percentage: 50 }),
       ]),
+    });
+  });
+
+  it('filters summary totals to the selected stable account profile', async () => {
+    writeAssistantEntries([
+      {
+        project: 'default-project',
+        sessionId: 'session-default',
+        timestamp: '2026-03-02T10:00:00.000Z',
+        model: 'claude-sonnet-4-5',
+        inputTokens: 100,
+        outputTokens: 10,
+      },
+    ]);
+    writeAssistantEntriesToDir(path.join(tempHome, '.ccs', 'instances', 'work'), [
+      {
+        project: 'work-project',
+        sessionId: 'session-work',
+        timestamp: '2026-03-02T11:00:00.000Z',
+        model: 'claude-sonnet-4-5',
+        inputTokens: 300,
+        outputTokens: 30,
+      },
+    ]);
+
+    const allProfilesRes = createMockResponse();
+    await handlers.handleSummary(
+      { query: { since: '20260302', until: '20260302' } } as never,
+      allProfilesRes as never
+    );
+
+    expect(allProfilesRes.payload).toMatchObject({
+      success: true,
+      data: {
+        totalInputTokens: 400,
+        totalOutputTokens: 40,
+      },
+    });
+
+    aggregator.clearUsageCache();
+    const workProfileRes = createMockResponse();
+    await handlers.handleSummary(
+      { query: { since: '20260302', until: '20260302', profile: 'work' } } as never,
+      workProfileRes as never
+    );
+
+    expect(workProfileRes.payload).toMatchObject({
+      success: true,
+      data: {
+        totalInputTokens: 300,
+        totalOutputTokens: 30,
+      },
+    });
+  });
+
+  it('filters sessions to the default profile without including account sessions', async () => {
+    writeAssistantEntries([
+      {
+        project: 'default-project',
+        sessionId: 'session-default',
+        timestamp: '2026-03-02T10:00:00.000Z',
+        model: 'claude-sonnet-4-5',
+        inputTokens: 100,
+        outputTokens: 10,
+      },
+    ]);
+    writeAssistantEntriesToDir(path.join(tempHome, '.ccs', 'instances', 'work'), [
+      {
+        project: 'work-project',
+        sessionId: 'session-work',
+        timestamp: '2026-03-02T11:00:00.000Z',
+        model: 'claude-sonnet-4-5',
+        inputTokens: 300,
+        outputTokens: 30,
+      },
+    ]);
+
+    const res = createMockResponse();
+    await handlers.handleSessions(
+      { query: { since: '20260302', until: '20260302', profile: 'default' } } as never,
+      res as never
+    );
+
+    expect(res.payload).toMatchObject({
+      success: true,
+      data: {
+        total: 1,
+        sessions: [expect.objectContaining({ sessionId: 'session-default' })],
+      },
     });
   });
 

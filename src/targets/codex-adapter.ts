@@ -26,6 +26,8 @@ import {
 import { createLogger } from '../services/logging';
 import { getEffectiveApiKey } from '../cliproxy/auth/auth-token-manager';
 import { resolveLifecyclePort } from '../cliproxy/config/port-manager';
+import { getModelMaxLevel } from '../cliproxy/model-catalog';
+import { parseCodexModelTuningAlias } from '../cliproxy/ai-providers/model-id-normalizer';
 import {
   CCSXP_CLIPROXY_SHORTCUT_ENV,
   CODEX_CLIPROXY_PROVIDER_ENV_KEY,
@@ -39,6 +41,7 @@ const CODEX_RUNTIME_PROVIDER_ID = 'ccs_runtime';
 const CODEX_RUNTIME_ENV_KEY = 'CCS_CODEX_API_KEY';
 const CODEX_REASONING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 const CODEX_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
+const CODEX_FAST_SERVICE_TIER = 'priority';
 
 function formatTomlString(value: string): string {
   return JSON.stringify(value);
@@ -100,6 +103,72 @@ function normalizeCodexReasoningOverride(value: string | number | undefined): st
   throw new Error(
     'Codex target supports reasoning levels only: minimal, low, medium, high, xhigh.'
   );
+}
+
+function normalizeCodexModelFlagValue(value: string): {
+  model: string;
+  effort?: string;
+  serviceTier?: string;
+} | null {
+  const parsed = parseCodexModelTuningAlias(value);
+  if (!parsed || !parsed.baseModel) return null;
+  if (getModelMaxLevel('codex', parsed.baseModel) === undefined) return null;
+  return {
+    model: parsed.baseModel,
+    effort: parsed.effort ?? undefined,
+    serviceTier: parsed.serviceTier ? CODEX_FAST_SERVICE_TIER : undefined,
+  };
+}
+
+function normalizeCcsxpCodexModelFlagAliases(args: string[]): {
+  args: string[];
+  overrides: string[];
+} {
+  const normalizedArgs = [...args];
+  let reasoningEffort: string | undefined;
+  let serviceTier: string | undefined;
+
+  const applyModelValue = (value: string): string => {
+    const normalized = normalizeCodexModelFlagValue(value);
+    if (!normalized) {
+      reasoningEffort = undefined;
+      serviceTier = undefined;
+      return value;
+    }
+
+    reasoningEffort = normalized.effort;
+    serviceTier = normalized.serviceTier;
+    return normalized.model;
+  };
+
+  for (let index = 0; index < normalizedArgs.length; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg === '-m' || arg === '--model') {
+      const nextValue = normalizedArgs[index + 1];
+      if (typeof nextValue === 'string') {
+        normalizedArgs[index + 1] = applyModelValue(nextValue);
+        index += 1;
+      }
+      continue;
+    }
+
+    for (const prefix of ['--model=', '-m=']) {
+      if (arg.startsWith(prefix)) {
+        normalizedArgs[index] = `${prefix}${applyModelValue(arg.slice(prefix.length))}`;
+        break;
+      }
+    }
+  }
+
+  const overrides: string[] = [];
+  if (reasoningEffort) {
+    overrides.push(`model_reasoning_effort=${formatTomlString(reasoningEffort)}`);
+  }
+  if (serviceTier) {
+    overrides.push(`service_tier=${formatTomlString(serviceTier)}`);
+  }
+
+  return { args: normalizedArgs, overrides };
 }
 
 function isInformationalCodexInvocation(args: string[]): boolean {
@@ -220,20 +289,23 @@ export class CodexAdapter implements TargetAdapter {
     const runtimeConfigOverrides = creds?.runtimeConfigOverrides ?? [];
 
     if (profileType === 'default') {
-      const overrides = [...runtimeConfigOverrides];
+      const modelFlagNormalization = isCcsxpCliproxyShortcut()
+        ? normalizeCcsxpCodexModelFlagAliases(userArgs)
+        : { args: userArgs, overrides: [] };
+      const overrides = [...runtimeConfigOverrides, ...modelFlagNormalization.overrides];
       if (reasoningOverride) {
         overrides.push(`model_reasoning_effort=${formatTomlString(reasoningOverride)}`);
       }
       if (overrides.length === 0) {
-        return userArgs;
+        return modelFlagNormalization.args;
       }
       if (!codexBinarySupportsConfigOverrides(options?.binaryInfo)) {
-        if (reasoningOverride) {
+        if (reasoningOverride || modelFlagNormalization.overrides.length > 0) {
           throw buildConfigOverrideSupportError(hydrateCodexBinaryVersion(options?.binaryInfo));
         }
-        return userArgs;
+        return modelFlagNormalization.args;
       }
-      return [...buildConfigOverrideArgs(overrides), ...userArgs];
+      return [...buildConfigOverrideArgs(overrides), ...modelFlagNormalization.args];
     }
 
     if (!codexBinarySupportsConfigOverrides(options?.binaryInfo)) {

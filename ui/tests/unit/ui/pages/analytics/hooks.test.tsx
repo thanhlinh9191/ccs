@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useAnalyticsPage } from '@/pages/analytics/hooks';
 import { AllProviders } from '@tests/setup/test-utils';
@@ -14,8 +14,46 @@ const usageMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/use-usage', () => usageMocks);
+vi.mock('@/hooks/use-accounts', () => ({
+  useAccounts: vi.fn(() => ({
+    data: { accounts: [{ name: 'work' }], default: 'work' },
+    isLoading: false,
+  })),
+}));
+vi.mock('@/hooks/use-profiles', () => ({
+  useProfiles: vi.fn(() => ({ data: { profiles: [] }, isLoading: false })),
+}));
 
 describe('useAnalyticsPage', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    Object.values(usageMocks).forEach((mock) => mock.mockClear());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('restores the persisted selected profile and passes it to analytics queries', () => {
+    vi.spyOn(globalThis.localStorage, 'getItem').mockImplementation((key) =>
+      key === 'ccs.analytics.selectedProfile' ? 'work' : null
+    );
+
+    renderHook(() => useAnalyticsPage(), {
+      wrapper: AllProviders,
+    });
+
+    expect(usageMocks.useUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: 'work' })
+    );
+    expect(usageMocks.useUsageTrends).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: 'work' })
+    );
+    expect(usageMocks.useModelUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: 'work' })
+    );
+  });
+
   it('requests a broader recent session sample instead of the old 3-session slice', () => {
     renderHook(() => useAnalyticsPage(), {
       wrapper: AllProviders,

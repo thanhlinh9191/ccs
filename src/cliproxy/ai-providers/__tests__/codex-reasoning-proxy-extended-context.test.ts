@@ -201,6 +201,59 @@ describe('CodexReasoningProxy extended-context compatibility', () => {
     expect(capturedBodies[1]?.service_tier).toBe('priority');
   });
 
+  it('translates minimal and low codex effort suffixes before forwarding upstream', async () => {
+    const capturedBodies: JsonRecord[] = [];
+
+    const upstream = http.createServer((req, res) => {
+      let rawBody = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        rawBody += chunk;
+      });
+      req.on('end', () => {
+        capturedBodies.push(rawBody ? (JSON.parse(rawBody) as JsonRecord) : {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    cleanupServers.push(upstream);
+
+    const upstreamPort = await listenOnRandomPort(upstream);
+    const proxy = new CodexReasoningProxy({
+      upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}`,
+      modelMap: {
+        defaultModel: 'gpt-5.4',
+      },
+      defaultEffort: 'medium',
+    });
+
+    const proxyPort = await proxy.start();
+    const minimalResponse = await postJson(
+      `http://127.0.0.1:${proxyPort}/api/provider/codex/v1/messages`,
+      {
+        model: 'gpt-5.5-minimal',
+        messages: [],
+      }
+    );
+    const lowFastResponse = await postJson(
+      `http://127.0.0.1:${proxyPort}/api/provider/codex/v1/messages`,
+      {
+        model: 'gpt-5.5-fast-low',
+        messages: [],
+      }
+    );
+
+    proxy.stop();
+
+    expect(minimalResponse.statusCode).toBe(200);
+    expect(lowFastResponse.statusCode).toBe(200);
+    expect(capturedBodies[0]?.model).toBe('gpt-5.5');
+    expect((capturedBodies[0]?.reasoning as JsonRecord | undefined)?.effort).toBe('minimal');
+    expect(capturedBodies[1]?.model).toBe('gpt-5.5');
+    expect((capturedBodies[1]?.reasoning as JsonRecord | undefined)?.effort).toBe('low');
+    expect(capturedBodies[1]?.service_tier).toBe('priority');
+  });
+
   it('skips reasoning injection when disableEffort is enabled', async () => {
     let capturedBody: JsonRecord | null = null;
 

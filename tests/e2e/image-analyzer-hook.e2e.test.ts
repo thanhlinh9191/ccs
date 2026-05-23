@@ -21,6 +21,7 @@ import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
+import type { AddressInfo } from 'net';
 
 // ============================================================================
 // TEST CONFIGURATION
@@ -28,7 +29,6 @@ import * as http from 'http';
 
 const HOOK_PATH = path.join(__dirname, '../../lib/hooks/image-analyzer-transformer.cjs');
 const TEST_DIR = '/tmp/ccs-hook-tests';
-const MOCK_PORT = 59876; // Use a unique port for mock server
 const CLIPROXY_API_KEY = 'test-api-key-12345';
 
 // Default provider models for testing (matches DEFAULT_IMAGE_ANALYSIS_CONFIG)
@@ -48,6 +48,7 @@ interface MockServerRequest {
 }
 
 let mockServer: http.Server | null = null;
+let mockPort = 0;
 let lastRequest: MockServerRequest | null = null;
 let mockResponse: { content: string; statusCode: number } = {
   content: 'This is a test image showing a red pixel.',
@@ -97,7 +98,8 @@ function startMockServer(): Promise<void> {
     });
 
     mockServer.on('error', reject);
-    mockServer.listen(MOCK_PORT, '127.0.0.1', () => {
+    mockServer.listen(0, '127.0.0.1', () => {
+      mockPort = (mockServer?.address() as AddressInfo).port;
       resolve();
     });
   });
@@ -111,6 +113,7 @@ function stopMockServer(): Promise<void> {
     if (mockServer) {
       mockServer.close(() => {
         mockServer = null;
+        mockPort = 0;
         resolve();
       });
     } else {
@@ -154,7 +157,7 @@ function buildHookEnv(env: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...baseEnv,
     CCS_CLIPROXY_API_KEY: CLIPROXY_API_KEY,
-    CCS_CLIPROXY_PORT: String(MOCK_PORT),
+    CCS_CLIPROXY_PORT: String(mockPort),
     CCS_IMAGE_ANALYSIS_PROVIDER_MODELS: DEFAULT_PROVIDER_MODELS,
     CCS_CURRENT_PROVIDER: DEFAULT_PROVIDER,
     ...env,
@@ -354,7 +357,7 @@ describe('Image Analyzer Hook', () => {
 
     // Start mock server
     await startMockServer();
-    console.log(`[Test Setup] Mock CLIProxy started on port ${MOCK_PORT}`);
+    console.log(`[Test Setup] Mock CLIProxy started on port ${mockPort}`);
 
     // Create test files
     testPngPath = path.join(TEST_DIR, 'test-image.png');
@@ -537,7 +540,7 @@ describe('Image Analyzer Hook', () => {
         env: {
           ...process.env,
           CCS_CLIPROXY_API_KEY: CLIPROXY_API_KEY,
-          CCS_CLIPROXY_PORT: String(MOCK_PORT),
+          CCS_CLIPROXY_PORT: String(mockPort),
           CCS_IMAGE_ANALYSIS_PROVIDER_MODELS: DEFAULT_PROVIDER_MODELS,
           CCS_CURRENT_PROVIDER: DEFAULT_PROVIDER,
         },

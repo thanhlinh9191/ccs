@@ -40,12 +40,34 @@ const QUERY_PARAM_REGEX = new RegExp(
 
 const BEARER_REGEX = /Bearer\s+[A-Za-z0-9._\-~+/=]+/gi;
 
+const KV_SEPARATORS = String.raw`(?:=|:)`;
+const VALUE_FRAGMENT = String.raw`[^\s,;&\]}\"']+`;
+const STRING_KV_KEYS = [...SENSITIVE_QUERY_KEYS, 'token'].filter((key) => key !== 'authorization');
+const SENSITIVE_KEY_GROUP = `(${STRING_KV_KEYS.join('|')})`;
+const LEADING_KV_REGEX = new RegExp(
+  String.raw`(^|\s)${SENSITIVE_KEY_GROUP}(\s*${KV_SEPARATORS}\s*)${VALUE_FRAGMENT}`,
+  'gi'
+);
+const QUOTED_JSON_KV_REGEX = new RegExp(
+  String.raw`([\"'])${SENSITIVE_KEY_GROUP}\1(\s*:\s*)([\"'])(?:\\.|(?!\4).)*?\4`,
+  'gi'
+);
+
 /** Redact sensitive query-param values inside any string. Idempotent. */
 export function redactString(s: string): string {
   if (!s) return s;
   return s
     .replace(QUERY_PARAM_REGEX, (_full, key) => `${key}=${REDACTED}`)
-    .replace(BEARER_REGEX, `Bearer ${REDACTED}`);
+    .replace(BEARER_REGEX, `Bearer ${REDACTED}`)
+    .replace(
+      QUOTED_JSON_KV_REGEX,
+      (_full, quoteKey, key, separator, quoteVal) =>
+        `${quoteKey}${key}${quoteKey}${separator}${quoteVal}${REDACTED}${quoteVal}`
+    )
+    .replace(
+      LEADING_KV_REGEX,
+      (_full, prefix, key, separator) => `${prefix}${key}${separator}${REDACTED}`
+    );
 }
 
 /** Redact a parsed URL by name; returns redacted href or original on parse error. */

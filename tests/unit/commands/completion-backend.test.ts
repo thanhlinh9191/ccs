@@ -154,6 +154,10 @@ describe('completion backend', () => {
   test('includes live doctor and cliproxy flags from the shared catalog', () => {
     expect(suggestionValues(['doctor'])).toEqual(expect.arrayContaining(['--fix', '-f']));
     expect(suggestionValues(['cliproxy'])).toEqual(expect.arrayContaining(['remove', '--backend']));
+    expect(suggestionValues(['docker'])).toEqual(
+      expect.arrayContaining(['show-key', 'finalize-key-rotation'])
+    );
+    expect(suggestionValues(['docker', 'show-key'])).toEqual(expect.arrayContaining(['--full']));
   });
 
   test('suggests browser subcommands and fix/setup flags', () => {

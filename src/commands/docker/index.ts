@@ -1,8 +1,10 @@
 import { extractOption, hasAnyFlag } from '../arg-extractor';
 import { handleConfig } from './config-subcommand';
 import { handleDown } from './down-subcommand';
+import { handleFinalizeKeyRotation } from './finalize-key-rotation-subcommand';
 import { showHelp } from './help-subcommand';
 import { handleLogs } from './logs-subcommand';
+import { handleShowKey } from './show-key-subcommand';
 import { handleStatus } from './status-subcommand';
 import { handleUp } from './up-subcommand';
 import { handleUpdate } from './update-subcommand';
@@ -44,6 +46,8 @@ export async function handleDockerCommand(args: string[]): Promise<void> {
     update: handleUpdate,
     logs: handleLogs,
     config: handleConfig,
+    'show-key': handleShowKey,
+    'finalize-key-rotation': handleFinalizeKeyRotation,
     help: async () => showHelp(),
   };
 

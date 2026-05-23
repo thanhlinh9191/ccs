@@ -105,9 +105,31 @@ describe('codex-dashboard-service', () => {
 
     expect(summary.length).toBe(2);
     expect(summary[0].name).toBe('cliproxy');
-    expect(summary[0].envKey).toBe('CLIPROXY_API_KEY');
+    expect(summary[0].baseUrl).toBe('[redacted:http]');
+    expect(summary[0].envKey).toBe('[set]');
     expect(summary[0].hasHttpHeaders).toBe(true);
     expect(summary[1].usesExperimentalBearerToken).toBe(true);
+  });
+
+  it('redacts custom provider URLs and env var names from diagnostics summaries', () => {
+    const summary = summarizeCodexModelProviders({
+      private: {
+        base_url: 'https://llm.internal.example.test/v1/responses?tenant=alpha',
+        env_key: 'PRIVATE_PROVIDER_TOKEN',
+        wire_api: 'responses',
+      },
+    });
+
+    expect(summary).toEqual([
+      expect.objectContaining({
+        name: 'private',
+        baseUrl: '[redacted:https]',
+        envKey: '[set]',
+        wireApi: 'responses',
+      }),
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('llm.internal.example.test');
+    expect(JSON.stringify(summary)).not.toContain('PRIVATE_PROVIDER_TOKEN');
   });
 
   it('summarizes feature flags, project trust, and mcp servers', () => {
@@ -136,9 +158,24 @@ describe('codex-dashboard-service', () => {
     expect(features.disabled.map((feature) => feature.name)).toEqual(['shell_snapshot']);
     expect(features.all.find((feature) => feature.name === 'custom_mode')?.state).toBe('custom');
     expect(projects.length).toBe(2);
+    expect(projects[0].path).toBe('a');
     expect(projects[0].trustLevel).toBe('trusted');
     expect(servers[0].transport).toBe('streamable-http');
     expect(servers[0].usesInlineBearerToken).toBe(true);
+  });
+
+  it('redacts project trust paths to basenames in diagnostics summaries', () => {
+    const summary = summarizeCodexProjectTrust({
+      '/Users/someone/CloudPersonal/private-workspace': { trust_level: 'trusted' },
+      '/var/tmp/other-workspace/': { trust_level: 'untrusted' },
+    });
+
+    expect(summary).toEqual([
+      { path: 'other-workspace', trustLevel: 'untrusted' },
+      { path: 'private-workspace', trustLevel: 'trusted' },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('/Users/someone');
+    expect(JSON.stringify(summary)).not.toContain('/var/tmp');
   });
 
   it('returns raw config payload for missing config.toml', async () => {
@@ -404,7 +441,7 @@ bearer_token = "secret"
     expect(diagnostics.config.modelAutoCompactTokenLimit).toBe(700000);
     expect(diagnostics.config.toolOutputTokenLimit).toBe(12000);
     expect(diagnostics.config.personality).toBe('friendly');
-    expect(diagnostics.config.projectTrust[0]?.path).toBe('/tmp/workspace-a');
+    expect(diagnostics.config.projectTrust[0]?.path).toBe('workspace-a');
     expect(result.rawText).toContain('model = "gpt-5.4"');
     expect(result.rawText).toContain('model_context_window = 800000');
     expect(result.rawText).toContain('model_auto_compact_token_limit = 700000');

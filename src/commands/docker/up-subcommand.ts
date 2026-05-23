@@ -34,6 +34,10 @@ export async function handleUp(args: string[]): Promise<void> {
   );
   try {
     await executor.up({ host: parsed.host, port, proxyPort });
+    const rotationBanner = executor.getKeyRotationBanner({ host: parsed.host });
+    if (rotationBanner) {
+      console.error(rotationBanner);
+    }
     console.log(ok(`Docker stack is running${parsed.host ? ` on ${parsed.host}` : ' locally'}.`));
     console.log(info(`Dashboard port: ${port}`));
     console.log(info(`CLIProxy port: ${proxyPort}`));

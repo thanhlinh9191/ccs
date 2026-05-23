@@ -27,6 +27,8 @@ export interface ModelBreakdown {
 /** Daily usage aggregation (YYYY-MM-DD) */
 export interface DailyUsage {
   date: string;
+  /** Stable CCS profile name when the source can be attributed to one. */
+  profile?: string;
   source: string;
   inputTokens: number;
   outputTokens: number;
@@ -41,6 +43,8 @@ export interface DailyUsage {
 /** Hourly usage aggregation (YYYY-MM-DD HH:00) */
 export interface HourlyUsage {
   hour: string; // Format: "YYYY-MM-DD HH:00"
+  /** Stable CCS profile name when the source can be attributed to one. */
+  profile?: string;
   source: string;
   inputTokens: number;
   outputTokens: number;
@@ -60,6 +64,8 @@ export interface HourlyUsage {
 /** Monthly usage aggregation (YYYY-MM) */
 export interface MonthlyUsage {
   month: string;
+  /** Stable CCS profile name when the source can be attributed to one. */
+  profile?: string;
   source: string;
   inputTokens: number;
   outputTokens: number;
@@ -73,6 +79,8 @@ export interface MonthlyUsage {
 /** Session-level usage aggregation */
 export interface SessionUsage {
   sessionId: string;
+  /** Stable CCS profile name when the source can be attributed to one. */
+  profile?: string;
   projectPath: string;
   inputTokens: number;
   outputTokens: number;

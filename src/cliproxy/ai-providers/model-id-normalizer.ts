@@ -26,7 +26,7 @@ const DENIED_ANTIGRAVITY_OPUS_45_REGEX =
 const DENIED_ANTIGRAVITY_SONNET_45_REGEX =
   /claude-sonnet-4(?:[.-])5(?:-thinking)?(?=(?:$|[^a-z0-9]))/gi;
 const CANONICAL_ANTIGRAVITY_OPUS_46_MODEL = 'claude-opus-4-6-thinking';
-const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(xhigh|high|medium|fast)$/i;
+const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(minimal|low|medium|high|xhigh|fast)$/i;
 const CODEX_LEGACY_MODEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   'gpt-5-codex': 'gpt-5.4',
   'gpt-5-codex-mini': 'gpt-5.4-mini',
@@ -44,6 +44,15 @@ const IFLOW_LEGACY_MODEL_ALIASES: Readonly<Record<string, string>> = Object.free
   'glm-4.7': 'glm-4.6',
   'minimax-m2.5': 'qwen3-coder-plus',
 });
+
+export type CodexModelTuningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type CodexModelServiceTier = 'fast';
+
+export interface CodexModelTuningAlias {
+  baseModel: string;
+  effort: CodexModelTuningEffort | null;
+  serviceTier: CodexModelServiceTier | null;
+}
 
 function trimModelId(model: string): string {
   return model.trim();
@@ -90,6 +99,23 @@ function splitCodexTuningSuffix(model: string): { baseModel: string; suffix: str
   return {
     baseModel,
     suffix: suffix ? `-${suffix}` : '',
+  };
+}
+
+export function parseCodexModelTuningAlias(model: string): CodexModelTuningAlias | null {
+  const trimmed = trimModelId(model);
+  const { baseModel, suffix } = splitBaseModelAndSuffix(trimmed);
+  if (suffix) return null;
+
+  const parsed = splitCodexTuningSuffix(baseModel);
+  if (!parsed.suffix) return null;
+
+  const tokens = parsed.suffix.slice(1).split('-');
+  const effort = tokens.find((token) => token !== 'fast') as CodexModelTuningEffort | undefined;
+  return {
+    baseModel: parsed.baseModel.trim(),
+    effort: effort ?? null,
+    serviceTier: tokens.includes('fast') ? 'fast' : null,
   };
 }
 

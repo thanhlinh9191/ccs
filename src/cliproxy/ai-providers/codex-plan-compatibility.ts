@@ -11,8 +11,8 @@ export type CodexPlanType = CodexQuotaResult['planType'];
 const FREE_SAFE_DEFAULT_MODEL = 'gpt-5.4';
 const FREE_SAFE_FAST_MODEL = 'gpt-5.4-mini';
 const CODEX_TUNING_SUFFIX_REGEX =
-  /(?:-(?:xhigh|high|medium)(?:-fast)?|-fast(?:-(?:xhigh|high|medium))?)$/i;
-const CODEX_PAREN_SUFFIX_REGEX = /\((xhigh|high|medium)\)$/i;
+  /(?:-(?:minimal|low|medium|high|xhigh)(?:-fast)?|-fast(?:-(?:minimal|low|medium|high|xhigh))?)$/i;
+const CODEX_PAREN_SUFFIX_REGEX = /\((minimal|low|medium|high|xhigh)\)$/i;
 const EXTENDED_CONTEXT_SUFFIX_REGEX = /\[1m\]$/i;
 const KNOWN_CODEX_MODELS = new Set(
   (getProviderCatalog('codex')?.models ?? []).map((model) => model.id.toLowerCase())

@@ -16,6 +16,7 @@ import {
   runImageAnalysisCheck,
 } from './checks';
 import { runAutoRepair } from './repair';
+import { getDockerKeyRotationStatus } from '../docker/docker-key-rotation';
 
 /**
  * Doctor Class - Orchestrates health checks
@@ -55,6 +56,7 @@ class Doctor {
     // Group 3: Configuration
     console.log(header('CONFIGURATION'));
     runConfigChecks(this.results);
+    this.runDockerKeyRotationCheck();
     console.log('');
 
     // Group 4: Profiles & Delegation
@@ -156,6 +158,48 @@ class Doctor {
     }
 
     console.log('');
+  }
+
+  private runDockerKeyRotationCheck(): void {
+    const status = getDockerKeyRotationStatus();
+    if (status.legacyGraceActive && status.legacyGrace) {
+      this.results.addCheck(
+        'Docker Key Rotation',
+        'warning',
+        `Legacy API key remains valid until ${status.legacyGrace.expiresAt}`,
+        'Run `ccs docker show-key --full`, update clients, then run `ccs docker finalize-key-rotation`.',
+        {
+          status: 'WARN',
+          info: `legacy key grace active until ${status.legacyGrace.expiresAt}`,
+        }
+      );
+      return;
+    }
+
+    if (status.stateCorrupted) {
+      this.results.addCheck(
+        'Docker Key Rotation',
+        'warning',
+        'Docker bootstrap state marker is unreadable',
+        'Run `ccs docker up` to recreate the marker.',
+        {
+          status: 'WARN',
+          info: 'state marker unreadable',
+        }
+      );
+      return;
+    }
+
+    this.results.addCheck(
+      'Docker Key Rotation',
+      'success',
+      'No active legacy API key grace',
+      undefined,
+      {
+        status: 'OK',
+        info: 'no active grace',
+      }
+    );
   }
 
   /**

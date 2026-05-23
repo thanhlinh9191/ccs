@@ -228,9 +228,10 @@ export function ModelConfigSection({
         ) : null}
         {provider === 'codex' && (
           <p className="text-[11px] text-muted-foreground mb-3 rounded-md border bg-muted/30 px-2.5 py-2">
-            Codex tip: suffixes <code>-medium</code>, <code>-high</code>, and <code>-xhigh</code>{' '}
-            pin reasoning effort. <code>-fast</code> enables the Codex fast service tier on models
-            that support it, including combined forms such as <code>gpt-5.4-high-fast</code>.
+            Codex tip: suffixes <code>-minimal</code>, <code>-low</code>, <code>-medium</code>,{' '}
+            <code>-high</code>, and <code>-xhigh</code> pin reasoning effort. <code>-fast</code>{' '}
+            enables the Codex fast service tier on models that support it, including combined forms
+            such as <code>gpt-5.4-high-fast</code>.
           </p>
         )}
         <div className="space-y-4">

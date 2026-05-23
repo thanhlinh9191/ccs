@@ -1,8 +1,14 @@
-export type CodexEffort = 'medium' | 'high' | 'xhigh';
+export type CodexEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexServiceTier = 'fast';
 
-const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(medium|high|xhigh|fast)$/i;
-const CODEX_EFFORTS_IN_ORDER: readonly CodexEffort[] = ['medium', 'high', 'xhigh'];
+const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(minimal|low|medium|high|xhigh|fast)$/i;
+const CODEX_EFFORTS_IN_ORDER: readonly CodexEffort[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+];
 
 function trimModelId(modelId: string | undefined): string {
   return modelId?.trim() ?? '';

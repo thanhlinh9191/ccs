@@ -121,6 +121,10 @@ describe('FlexibleModelSelector', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /select model/i }));
 
+    expect(screen.getByText('Reasoning variants')).toBeInTheDocument();
+    expect(screen.getByText('Fast variants')).toBeInTheDocument();
+    expect(screen.getByText('gpt-5.5-minimal')).toBeInTheDocument();
+    expect(screen.getByText('gpt-5.5-low')).toBeInTheDocument();
     expect(screen.getByText('gpt-5.3-codex-high')).toBeInTheDocument();
     expect(screen.getByText('gpt-5.3-codex-xhigh')).toBeInTheDocument();
     expect(screen.getByText('gpt-5.4-high-fast')).toBeInTheDocument();

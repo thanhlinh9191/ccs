@@ -8,7 +8,7 @@ import {
 } from './codex-plan-compatibility';
 import { getModelMaxLevel } from '../model-catalog';
 
-export type CodexReasoningEffort = 'medium' | 'high' | 'xhigh';
+export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexServiceTier = 'fast';
 type CodexServiceTierRequestValue = 'priority';
 
@@ -48,7 +48,7 @@ interface ForwardJsonContext {
 }
 
 const EXTENDED_CONTEXT_SUFFIX_REGEX = /\[1m\]$/i;
-const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(xhigh|high|medium|fast)$/i;
+const CODEX_TUNING_SUFFIX_TOKEN_REGEX = /-(minimal|low|medium|high|xhigh|fast)$/i;
 const CODEX_SERVICE_TIER_REQUEST_VALUE: Record<CodexServiceTier, CodexServiceTierRequestValue> = {
   fast: 'priority',
 };
@@ -108,13 +108,15 @@ function isKnownCodexModelId(
 }
 
 const EFFORT_RANK: Record<CodexReasoningEffort, number> = {
-  medium: 1,
-  high: 2,
-  xhigh: 3,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
 };
 
 /** All valid codex effort levels in rank order */
-const EFFORT_BY_RANK: CodexReasoningEffort[] = ['medium', 'high', 'xhigh'];
+const EFFORT_BY_RANK: CodexReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 function minEffort(a: CodexReasoningEffort, b: CodexReasoningEffort): CodexReasoningEffort {
   return EFFORT_RANK[a] <= EFFORT_RANK[b] ? a : b;
@@ -128,7 +130,7 @@ function capEffortAtModelMax(model: string, effort: CodexReasoningEffort): Codex
   const maxLevel = getModelMaxLevel('codex', model);
   if (!maxLevel) return effort;
 
-  // Map maxLevel to CodexReasoningEffort (only medium/high/xhigh are valid)
+  // Map maxLevel to CodexReasoningEffort.
   const maxEffort = EFFORT_BY_RANK.find((e) => e === maxLevel);
   if (!maxEffort) return effort;
 
@@ -238,7 +240,13 @@ export class CodexReasoningProxy {
     serviceTier: CodexServiceTier | null;
     path: string;
   }> = [];
-  private readonly counts: Record<CodexReasoningEffort, number> = { medium: 0, high: 0, xhigh: 0 };
+  private readonly counts: Record<CodexReasoningEffort, number> = {
+    minimal: 0,
+    low: 0,
+    medium: 0,
+    high: 0,
+    xhigh: 0,
+  };
 
   constructor(config: CodexReasoningProxyConfig) {
     this.config = {
@@ -298,7 +306,7 @@ export class CodexReasoningProxy {
   }
 
   /**
-   * Treat trailing "-high/-medium/-xhigh" and "-fast" as Codex tuning aliases
+   * Treat trailing effort tokens and "-fast" as Codex tuning aliases
    * only for known codex models.
    * Prevents stripping legitimate upstream model IDs that happen to end with those tokens.
    */

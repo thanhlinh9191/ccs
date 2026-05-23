@@ -11,6 +11,7 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { fail, info, warn, color, ok } from '../../utils/ui';
 import { createLogger } from '../../services/logging';
 import { ensureCLIProxyBinary, getStoredConfiguredBackend } from '../binary-manager';
@@ -76,12 +77,24 @@ import {
 } from '../accounts/account-safety';
 import { ensureCliAntigravityResponsibility } from '../auth/antigravity-responsibility';
 import { InteractivePrompt } from '../../utils/prompt';
+import { getCcsDir } from '../../utils/config-manager';
+import { generateSessionId } from './project-selection-handler';
+import { createFileSink } from './oauth-trace/sink-file';
+import { createOAuthTraceRecorder, OAuthTracePhase, type OAuthTraceRecorder } from './oauth-trace';
+import { diagnoseFailure, formatErrorMessage } from './oauth-trace/diagnose-failure';
 
 interface PasteCallbackStartData {
   url?: string;
   auth_url?: string;
   state?: string;
   status?: string;
+}
+
+interface PasteCallbackTraceOptions {
+  trace?: OAuthTraceRecorder;
+  promptForCallbackUrl?: (timeoutMs: number) => Promise<string | null>;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
 }
 
 const PASTE_CALLBACK_AUTH_URL_POLL_INTERVAL_MS = 3000;
@@ -641,7 +654,81 @@ export function usesKiroLocalCallbackReplay(
  * Handle paste-callback mode: show auth URL, prompt for callback paste
  * Uses proxy target resolver to connect to correct CLIProxyAPI instance (local or remote)
  */
-async function handlePasteCallbackMode(
+function createPasteCallbackTraceRecorder(
+  provider: CLIProxyProvider,
+  verbose: boolean
+): OAuthTraceRecorder {
+  const fileSink =
+    process.env['CCS_OAUTH_LOG_FILE'] === '1'
+      ? createFileSink({ dir: path.join(getCcsDir(), 'logs') })
+      : undefined;
+  return createOAuthTraceRecorder({
+    sessionId: generateSessionId(),
+    provider,
+    verbose,
+    fileSink,
+  });
+}
+
+async function promptForPasteCallbackUrl(timeoutMs: number): Promise<string | null> {
+  const readline = await import('readline');
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise<string | null>((resolve) => {
+    let resolved = false;
+
+    rl.on('close', () => {
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    });
+
+    console.log(info('After completing authentication, paste the callback URL here:'));
+    rl.question('> ', (answer) => {
+      resolved = true;
+      rl.close();
+      resolve(answer.trim() || null);
+    });
+
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        rl.close();
+        console.log('');
+        console.log(
+          fail(`Timed out waiting for callback URL (${Math.round(timeoutMs / 60000)} minutes)`)
+        );
+        resolve(null);
+      }
+    }, timeoutMs);
+  });
+}
+
+function printPasteCallbackTraceDiagnosis(
+  trace: OAuthTraceRecorder,
+  provider: CLIProxyProvider,
+  verbose: boolean
+): void {
+  const diagnosis = diagnoseFailure(trace.snapshot());
+  if (diagnosis.branchId === 'UNKNOWN') {
+    return;
+  }
+  const callbackPort = OAUTH_PORTS[provider] ?? null;
+  for (const line of formatErrorMessage(diagnosis, {
+    verbose,
+    platform: process.platform,
+    callbackPort,
+    provider,
+  })) {
+    console.log(line);
+  }
+}
+
+export async function handlePasteCallbackMode(
   provider: CLIProxyProvider,
   oauthConfig: ProviderOAuthConfig,
   verbose: boolean,
@@ -652,12 +739,14 @@ async function handlePasteCallbackMode(
     kiroMethod?: OAuthOptions['kiroMethod'];
     gitlabBaseUrl?: OAuthOptions['gitlabBaseUrl'];
     add?: boolean;
-  }
+  } & PasteCallbackTraceOptions
 ): Promise<AccountInfo | null> {
   // Resolve CLIProxyAPI target (local or remote based on config)
   const target = getProxyTarget();
   // OAuth state timeout (10 minutes, matches CLIProxyAPI state TTL)
-  const OAUTH_STATE_TIMEOUT_MS = 10 * 60 * 1000;
+  const OAUTH_STATE_TIMEOUT_MS = options?.timeoutMs ?? 10 * 60 * 1000;
+  const pollIntervalMs = options?.pollIntervalMs ?? PASTE_CALLBACK_AUTH_URL_POLL_INTERVAL_MS;
+  const trace = options?.trace ?? createPasteCallbackTraceRecorder(provider, verbose);
 
   console.log('');
   console.log(info(`Starting ${oauthConfig.displayName} OAuth (paste-callback mode)...`));
@@ -694,19 +783,37 @@ async function handlePasteCallbackMode(
         }
       }
       warnPossible403Ban(provider, startError);
+      trace.record(OAuthTracePhase.Error, { startPath }, { message: startError });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
-    const authUrl = await resolvePasteCallbackAuthUrl(target, startData, OAUTH_STATE_TIMEOUT_MS);
+    const authUrl = await resolvePasteCallbackAuthUrl(
+      target,
+      startData,
+      OAUTH_STATE_TIMEOUT_MS,
+      pollIntervalMs
+    );
 
     if (!authUrl) {
       console.log(fail('No authorization URL received'));
+      trace.record(OAuthTracePhase.Error, {}, { message: 'No authorization URL received' });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
     const authUrlCredentialError = getGeminiAuthUrlCredentialError(provider, authUrl);
     if (authUrlCredentialError) {
       console.log(fail(authUrlCredentialError));
+      trace.record(
+        OAuthTracePhase.Error,
+        {},
+        { code: 'GEMINI_PLUS_MISSING_CRED', message: authUrlCredentialError }
+      );
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
@@ -721,47 +828,22 @@ async function handlePasteCallbackMode(
     console.log('');
     console.log(`    ${authUrl}`);
     console.log('');
+    trace.record(OAuthTracePhase.AuthUrlDisplayed, { authUrl });
 
     // Prompt for callback URL
-    const readline = await import('readline');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const callbackUrl = await new Promise<string | null>((resolve) => {
-      let resolved = false;
-
-      rl.on('close', () => {
-        if (!resolved) {
-          resolved = true;
-          resolve(null);
-        }
-      });
-
-      console.log(info('After completing authentication, paste the callback URL here:'));
-      rl.question('> ', (answer) => {
-        resolved = true;
-        rl.close();
-        resolve(answer.trim() || null);
-      });
-
-      // Timeout after 10 minutes (match state TTL)
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          rl.close();
-          console.log('');
-          console.log(fail('Timed out waiting for callback URL (10 minutes)'));
-          resolve(null);
-        }
-      }, OAUTH_STATE_TIMEOUT_MS);
-    });
+    trace.record(OAuthTracePhase.PasteCallbackPrompted, { timeoutMs: OAUTH_STATE_TIMEOUT_MS });
+    const callbackUrl = await (options?.promptForCallbackUrl ?? promptForPasteCallbackUrl)(
+      OAUTH_STATE_TIMEOUT_MS
+    );
 
     if (!callbackUrl) {
       console.log(info('Cancelled'));
+      trace.record(OAuthTracePhase.Cancelled, { reason: 'empty_callback' });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
+    trace.record(OAuthTracePhase.PasteCallbackReceived, { callbackUrl });
 
     // Validate callback URL
     let code: string | undefined;
@@ -770,11 +852,17 @@ async function handlePasteCallbackMode(
       code = parsed.searchParams.get('code') || undefined;
     } catch {
       console.log(fail('Invalid URL format'));
+      trace.record(OAuthTracePhase.PasteCallbackInvalid, { reason: 'invalid_url' });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
     if (!code) {
       console.log(fail('Invalid callback URL: missing code parameter'));
+      trace.record(OAuthTracePhase.PasteCallbackInvalid, { reason: 'missing_code' });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
@@ -782,6 +870,7 @@ async function handlePasteCallbackMode(
     console.log(info('Submitting callback...'));
 
     const callbackProvider = CLIPROXY_CALLBACK_PROVIDER_MAP[provider] || provider;
+    trace.record(OAuthTracePhase.PasteCallbackSubmitted, { provider: callbackProvider });
 
     const callbackResponse = await fetch(buildProxyUrl(target, getManagementOAuthCallbackPath()), {
       method: 'POST',
@@ -802,10 +891,18 @@ async function handlePasteCallbackMode(
         callbackData.error || `OAuth callback failed with status ${callbackResponse.status}`;
       console.log(fail(callbackError));
       warnPossible403Ban(provider, callbackError);
+      trace.record(
+        OAuthTracePhase.Error,
+        { status: callbackResponse.status },
+        { code: 'CALLBACK_REJECTED', message: callbackError }
+      );
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
     console.log(info('Callback submitted. Waiting for token exchange...'));
+    trace.record(OAuthTracePhase.TokenExchangePending, { state: oauthState ?? undefined });
     const { tokenSnapshot, error: tokenWaitError } = await waitForManualCallbackToken(
       provider,
       target,
@@ -813,12 +910,20 @@ async function handlePasteCallbackMode(
       oauthState,
       knownTokenFiles,
       expectedAccountId,
-      OAUTH_STATE_TIMEOUT_MS
+      OAUTH_STATE_TIMEOUT_MS,
+      pollIntervalMs
     );
 
     if (tokenWaitError) {
       console.log(fail(tokenWaitError));
       warnPossible403Ban(provider, tokenWaitError);
+      trace.record(
+        OAuthTracePhase.Error,
+        {},
+        { code: 'CALLBACK_REJECTED', message: tokenWaitError }
+      );
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
 
@@ -828,8 +933,12 @@ async function handlePasteCallbackMode(
           'Authentication completed upstream, but no new local token was saved for this account. Update CCS/CLIProxy and retry.'
         )
       );
+      trace.record(OAuthTracePhase.TokenFileMissing, {});
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
+    trace.record(OAuthTracePhase.TokenFileAppeared, {});
 
     const account = registerAccountFromToken(
       provider,
@@ -843,8 +952,12 @@ async function handlePasteCallbackMode(
       console.log(
         fail('Authenticated token could not be matched to the requested account. Retry the flow.')
       );
+      trace.record(OAuthTracePhase.TokenFileMissing, { reason: 'account_match_failed' });
+      await trace.flush();
+      printPasteCallbackTraceDiagnosis(trace, provider, verbose);
       return null;
     }
+    await trace.flush();
 
     console.log(ok('Authentication successful!'));
 
@@ -863,6 +976,9 @@ async function handlePasteCallbackMode(
     } else {
       console.log(fail('OAuth failed. Use --verbose for details.'));
     }
+    trace.record(OAuthTracePhase.Error, {}, error as Error);
+    await trace.flush();
+    printPasteCallbackTraceDiagnosis(trace, provider, verbose);
     return null;
   }
 }

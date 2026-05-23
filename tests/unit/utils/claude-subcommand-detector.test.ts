@@ -26,6 +26,7 @@ describe('isClaudeSubcommandInvocation', () => {
       'plugin',
       'plugins',
       'project',
+      'remote-control',
       'setup-token',
       'ultrareview',
       'update',
@@ -86,28 +87,88 @@ describe('stripClaudeCodeFeatureBlockingEnv', () => {
 });
 
 describe('stripClaudeSubcommandSessionArgs', () => {
-  it('removes session-only flags before a Claude subcommand', () => {
+  it('removes session-only flags before a non-agents Claude subcommand', () => {
     expect(
       stripClaudeSubcommandSessionArgs([
         '--dangerously-skip-permissions',
         '--teammate-mode',
         'in-process',
-        'agents',
+        'doctor',
       ])
-    ).toEqual(['agents']);
+    ).toEqual(['doctor']);
   });
 
-  it('removes session-only flags after a Claude subcommand while preserving subcommand flags', () => {
+  it('removes session-only flags after a non-agents subcommand while preserving subcommand flags', () => {
     expect(
       stripClaudeSubcommandSessionArgs([
-        'agents',
+        'mcp',
         '--dangerously-skip-permissions',
         '--teammate-mode',
         'in-process',
         '--setting-sources',
         'user',
       ])
-    ).toEqual(['agents', '--setting-sources', 'user']);
+    ).toEqual(['mcp', '--setting-sources', 'user']);
+  });
+
+  it('removes --permission-mode for non-agents subcommands', () => {
+    expect(
+      stripClaudeSubcommandSessionArgs(['--permission-mode', 'bypassPermissions', 'doctor'])
+    ).toEqual(['doctor']);
+    expect(stripClaudeSubcommandSessionArgs(['doctor', '--permission-mode=acceptEdits'])).toEqual([
+      'doctor',
+    ]);
+    expect(
+      stripClaudeSubcommandSessionArgs(['remote-control', '--permission-mode', 'bypassPermissions'])
+    ).toEqual(['remote-control']);
+  });
+
+  it('preserves --permission-mode for the agents subcommand (after)', () => {
+    // `claude agents` accepts `--permission-mode <mode>` as the default
+    // permission mode for dispatched sessions; CCS must not strip it.
+    expect(
+      stripClaudeSubcommandSessionArgs([
+        'agents',
+        '--permission-mode',
+        'bypassPermissions',
+        '--teammate-mode',
+        'in-process',
+      ])
+    ).toEqual(['agents', '--permission-mode', 'bypassPermissions']);
+  });
+
+  it('preserves --permission-mode for the agents subcommand (before, separate value form)', () => {
+    expect(
+      stripClaudeSubcommandSessionArgs(['--permission-mode', 'bypassPermissions', 'agents'])
+    ).toEqual(['--permission-mode', 'bypassPermissions', 'agents']);
+  });
+
+  it('preserves --permission-mode for the agents subcommand (before, --flag=value form)', () => {
+    expect(
+      stripClaudeSubcommandSessionArgs(['--permission-mode=bypassPermissions', 'agents'])
+    ).toEqual(['--permission-mode=bypassPermissions', 'agents']);
+  });
+
+  it('preserves --dangerously-skip-permissions and --allow-dangerously-skip-permissions for agents', () => {
+    expect(
+      stripClaudeSubcommandSessionArgs([
+        '--dangerously-skip-permissions',
+        '--allow-dangerously-skip-permissions',
+        'agents',
+      ])
+    ).toEqual(['--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', 'agents']);
+  });
+
+  it('still strips --teammate-mode for the agents subcommand (not accepted by upstream)', () => {
+    expect(
+      stripClaudeSubcommandSessionArgs([
+        'agents',
+        '--teammate-mode',
+        'in-process',
+        '--permission-mode',
+        'bypassPermissions',
+      ])
+    ).toEqual(['agents', '--permission-mode', 'bypassPermissions']);
   });
 
   it('leaves non-subcommand interactive launches unchanged', () => {
@@ -127,14 +188,17 @@ describe('subcommand passthrough — injectors short-circuit', () => {
     expect(appendThirdPartyWebSearchToolArgs(['agents'])).toEqual(['agents']);
     expect(appendThirdPartyWebSearchToolArgs(['doctor'])).toEqual(['doctor']);
     expect(appendThirdPartyWebSearchToolArgs(['mcp', 'list'])).toEqual(['mcp', 'list']);
+    expect(appendThirdPartyWebSearchToolArgs(['remote-control'])).toEqual(['remote-control']);
   });
 
   it('appendThirdPartyImageAnalysisToolArgs returns args unchanged for subcommand invocations', () => {
     expect(appendThirdPartyImageAnalysisToolArgs(['agents'])).toEqual(['agents']);
+    expect(appendThirdPartyImageAnalysisToolArgs(['remote-control'])).toEqual(['remote-control']);
   });
 
   it('appendBrowserToolArgs returns args unchanged for subcommand invocations', () => {
     expect(appendBrowserToolArgs(['agents'])).toEqual(['agents']);
+    expect(appendBrowserToolArgs(['remote-control'])).toEqual(['remote-control']);
   });
 
   it('injectors still inject for non-subcommand interactive launches', () => {

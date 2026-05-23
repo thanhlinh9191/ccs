@@ -49,6 +49,18 @@ beforeEach(() => {
       calls.push(`config:${args.join(' ')}`);
     },
   }));
+
+  mock.module('../../../src/commands/docker/show-key-subcommand', () => ({
+    handleShowKey: async (args: string[]) => {
+      calls.push(`show-key:${args.join(' ')}`);
+    },
+  }));
+
+  mock.module('../../../src/commands/docker/finalize-key-rotation-subcommand', () => ({
+    handleFinalizeKeyRotation: async (args: string[]) => {
+      calls.push(`finalize-key-rotation:${args.join(' ')}`);
+    },
+  }));
 });
 
 afterEach(() => {
@@ -103,5 +115,14 @@ describe('docker command', () => {
 
     expect(calls).toEqual(['help']);
     expect(process.exitCode).toBe(1);
+  });
+
+  it('routes Docker key rotation subcommands', async () => {
+    const handleDockerCommand = await loadHandleDockerCommand();
+
+    await handleDockerCommand(['show-key', '--full']);
+    await handleDockerCommand(['finalize-key-rotation']);
+
+    expect(calls).toEqual(['show-key:--full', 'finalize-key-rotation:']);
   });
 });

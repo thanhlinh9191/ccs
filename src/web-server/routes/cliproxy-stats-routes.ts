@@ -6,10 +6,6 @@ import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  isRunningUnderSupervisord,
-  restartCliproxyViaSupervisord,
-} from '../../docker/supervisord-lifecycle';
-import {
   fetchCliproxyStats,
   fetchCliproxyModels,
   isCliproxyRunning,
@@ -59,9 +55,11 @@ import {
   getDeniedModelIdReasonForProvider,
 } from '../../cliproxy/ai-providers/model-id-normalizer';
 import { installDashboardCliproxyVersion } from '../services/cliproxy-dashboard-install-service';
+import { restartDashboardCliproxy } from '../services/cliproxy-dashboard-restart-service';
 import { requireLocalAccessWhenAuthDisabled } from '../middleware/auth-middleware';
 
 const router = Router();
+type RestartDashboardCliproxyHandler = typeof restartDashboardCliproxy;
 
 const QUOTA_RATE_LIMIT_WINDOW_MS = 60_000;
 const QUOTA_RATE_LIMIT_MAX_REQUESTS = 120;
@@ -1085,34 +1083,21 @@ router.post('/install', async (req: Request, res: Response): Promise<void> => {
  * POST /api/cliproxy/restart - Restart CLIProxy without version change
  * Returns: { success, port?, error? }
  */
-router.post('/restart', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const port = resolveLifecyclePort();
-    if (isRunningUnderSupervisord()) {
-      // Docker mode: delegate to supervisord which owns the process lifecycle
-      const result = restartCliproxyViaSupervisord();
+export function registerCliproxyRestartRoute(
+  targetRouter: Router,
+  restartHandler: RestartDashboardCliproxyHandler = restartDashboardCliproxy
+): void {
+  targetRouter.post('/restart', async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await restartHandler();
       res.json(result);
-      return;
+    } catch (error) {
+      console.error(`[cliproxy-stats] ${(error as Error).message}`);
+      res.status(500).json({ error: 'Internal server error' });
     }
+  });
+}
 
-    // Local mode: direct process management
-    await stopProxy(port);
-
-    // Small delay to ensure port is released
-    await new Promise((r) => setTimeout(r, 500));
-
-    // Start proxy
-    const startResult = await ensureCliproxyService(port);
-
-    if (startResult.started || startResult.alreadyRunning) {
-      res.json({ success: true, port: startResult.port });
-    } else {
-      res.json({ success: false, error: startResult.error || 'Failed to start proxy' });
-    }
-  } catch (error) {
-    console.error(`[cliproxy-stats] ${(error as Error).message}`);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+registerCliproxyRestartRoute(router);
 
 export default router;

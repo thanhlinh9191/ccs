@@ -16,6 +16,7 @@ import type { CodexEffort, CodexServiceTier } from '@/lib/codex-effort';
 import {
   getCodexEffortDisplay,
   getCodexEffortVariants,
+  parseCodexEffort,
   parseCodexServiceTier,
 } from '@/lib/codex-effort';
 import { getResolvedCatalogModels, getSupplementalCatalogModels } from '@/lib/model-catalogs';
@@ -344,6 +345,13 @@ function getModelOptionValues(
     : [optionValue];
 }
 
+function getRecommendedGroupKey(optionValue: string, isCodexProvider: boolean): string {
+  if (!isCodexProvider) return 'recommended';
+  if (parseCodexServiceTier(optionValue)) return 'codex-fast';
+  if (parseCodexEffort(optionValue)) return 'codex-reasoning';
+  return 'recommended';
+}
+
 export function FlexibleModelSelector({
   label,
   description,
@@ -400,7 +408,7 @@ export function FlexibleModelSelector({
 
     return optionValues.map((optionValue) => ({
       value: optionValue,
-      groupKey: 'recommended',
+      groupKey: getRecommendedGroupKey(optionValue, isCodexProvider),
       searchText: `${optionValue} ${model.id} ${model.name} ${routingHint?.recommendedModelId ?? ''}`,
       keywords: [model.tier ?? '', catalog?.provider ?? ''],
       triggerContent: (
@@ -555,6 +563,26 @@ export function FlexibleModelSelector({
               <span className="text-xs text-primary">{t('providerModelSelector.recommended')}</span>
             ),
           },
+          ...(isCodexProvider
+            ? [
+                {
+                  key: 'codex-reasoning',
+                  label: (
+                    <span className="text-xs text-muted-foreground">
+                      {t('providerModelSelector.codexReasoningVariants')}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'codex-fast',
+                  label: (
+                    <span className="text-xs text-amber-600">
+                      {t('providerModelSelector.codexFastVariants')}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           ...(allModelOptions.length > 0
             ? [
                 {

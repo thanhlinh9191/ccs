@@ -17,8 +17,35 @@ import {
   useSessions,
   type ModelUsage,
 } from '@/hooks/use-usage';
+import { useAccounts } from '@/hooks/use-accounts';
+import { useProfiles } from '@/hooks/use-profiles';
 
 const RECENT_SESSION_SAMPLE_LIMIT = 50;
+const ANALYTICS_PROFILE_STORAGE_KEY = 'ccs.analytics.selectedProfile';
+const ALL_PROFILES_VALUE = 'all';
+
+export interface AnalyticsProfileOption {
+  value: string;
+  label: string;
+  description: string;
+  supported: boolean;
+}
+
+function readPersistedProfile(): string {
+  if (typeof globalThis.localStorage === 'undefined') return ALL_PROFILES_VALUE;
+  const profile = globalThis.localStorage.getItem(ANALYTICS_PROFILE_STORAGE_KEY);
+  if (!profile || profile.startsWith('unsupported:')) return ALL_PROFILES_VALUE;
+  return profile;
+}
+
+function persistSelectedProfile(profile: string): void {
+  if (typeof globalThis.localStorage === 'undefined') return;
+  if (profile === ALL_PROFILES_VALUE) {
+    globalThis.localStorage.removeItem(ANALYTICS_PROFILE_STORAGE_KEY);
+    return;
+  }
+  globalThis.localStorage.setItem(ANALYTICS_PROFILE_STORAGE_KEY, profile);
+}
 
 export function useAnalyticsPage() {
   // Default to last 30 days
@@ -28,8 +55,11 @@ export function useAnalyticsPage() {
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelUsage | null>(null);
+  const [selectedProfile, setSelectedProfileState] = useState(readPersistedProfile);
   const [popoverPosition, setPopoverPosition] = useState<{ x: number; y: number } | null>(null);
   const [viewMode, setViewMode] = useState<'daily' | 'hourly'>('daily');
+  const { data: accountsView } = useAccounts();
+  const { data: apiProfiles } = useProfiles();
 
   // Refresh hook
   const refreshUsage = useRefreshUsage();
@@ -48,9 +78,48 @@ export function useAnalyticsPage() {
     () => ({
       startDate: dateRange?.from,
       endDate: dateRange?.to,
+      profile: selectedProfile === ALL_PROFILES_VALUE ? undefined : selectedProfile,
     }),
-    [dateRange?.from, dateRange?.to]
+    [dateRange?.from, dateRange?.to, selectedProfile]
   );
+
+  const profileOptions = useMemo<AnalyticsProfileOption[]>(() => {
+    const accountNames = new Set(accountsView?.accounts.map((account) => account.name) ?? []);
+    const options: AnalyticsProfileOption[] = [
+      {
+        value: ALL_PROFILES_VALUE,
+        label: 'All profiles',
+        description: 'Includes all analytics sources.',
+        supported: true,
+      },
+      {
+        value: 'default',
+        label: 'Default Claude',
+        description: 'Profile-scoped Claude JSONL data.',
+        supported: true,
+      },
+      ...Array.from(accountNames)
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => ({
+          value: name,
+          label: name,
+          description: 'Profile-scoped account data.',
+          supported: true,
+        })),
+    ];
+
+    for (const profile of apiProfiles?.profiles ?? []) {
+      if (accountNames.has(profile.name) || profile.name === 'default') continue;
+      options.push({
+        value: `unsupported:${profile.name}`,
+        label: profile.name,
+        description: 'API profile usage is not yet attributed by stable profile.',
+        supported: false,
+      });
+    }
+
+    return options;
+  }, [accountsView?.accounts, apiProfiles?.profiles]);
 
   // Fetch data
   const { data: summary, isLoading: isSummaryLoading } = useUsageSummary(apiOptions);
@@ -76,6 +145,12 @@ export function useAnalyticsPage() {
     setViewMode('daily'); // Switch back to daily view for multi-day ranges
   }, []);
 
+  const handleProfileChange = useCallback((profile: string) => {
+    if (profile.startsWith('unsupported:')) return;
+    setSelectedProfileState(profile);
+    persistSelectedProfile(profile);
+  }, []);
+
   // Format "Last updated" text
   const lastUpdatedText = useMemo(() => {
     if (!status?.lastFetch) return null;
@@ -99,6 +174,8 @@ export function useAnalyticsPage() {
     dateRange,
     isRefreshing,
     viewMode,
+    selectedProfile,
+    profileOptions,
     selectedModel,
     popoverPosition,
     // Data
@@ -120,6 +197,7 @@ export function useAnalyticsPage() {
     handleRefresh,
     handleTodayClick,
     handleDateRangeChange,
+    handleProfileChange,
     handleModelClick,
     handlePopoverClose,
     // Text

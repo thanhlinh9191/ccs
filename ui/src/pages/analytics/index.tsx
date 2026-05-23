@@ -23,6 +23,8 @@ export function AnalyticsPage() {
     isRefreshing,
     lastUpdatedText,
     viewMode,
+    selectedProfile,
+    profileOptions,
     summary,
     isSummaryLoading,
     trends,
@@ -34,6 +36,7 @@ export function AnalyticsPage() {
     isModelsLoading,
     isSessionsLoading,
     handleModelClick,
+    handleProfileChange,
     selectedModel,
     popoverPosition,
     handlePopoverClose,
@@ -50,6 +53,9 @@ export function AnalyticsPage() {
         isRefreshing={isRefreshing}
         lastUpdatedText={lastUpdatedText}
         viewMode={viewMode}
+        selectedProfile={selectedProfile}
+        profileOptions={profileOptions}
+        onProfileChange={handleProfileChange}
       />
 
       {/* Summary Cards */}

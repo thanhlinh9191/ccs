@@ -10,13 +10,15 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${CCS_DASHBOARD_PORT:-3000}:3000"
-      - "${CCS_CLIPROXY_PORT:-8317}:8317"
+      - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_DASHBOARD_PORT:-3000}:3000"
+      - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_CLIPROXY_PORT:-8317}:8317"
     environment:
       CCS_PORT: 3000
       NODE_ENV: production
       NO_COLOR: "${NO_COLOR:-}"
       CCS_DEBUG: "${CCS_DEBUG:-}"
+      CCS_DOCKER_LEGACY_KEY_GRACE_DAYS: "${CCS_DOCKER_LEGACY_KEY_GRACE_DAYS:-}"
+      CCS_DOCKER_RESTORE_LEGACY_API_KEY: "${CCS_DOCKER_RESTORE_LEGACY_API_KEY:-}"
     volumes:
       - ccs_home:/root/.ccs
       - ccs_logs:/var/log/ccs

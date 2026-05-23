@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { OAUTH_CONFIGS } from '../auth-types';
 import { diagnoseFailure, formatErrorMessage } from '../oauth-trace/diagnose-failure';
 import { OAuthTracePhase, type OAuthTraceEvent } from '../oauth-trace/trace-events';
 
@@ -194,4 +195,88 @@ describe('formatErrorMessage', () => {
     );
     expect(lines.some((l) => l.includes('--verbose'))).toBe(true);
   });
+});
+
+describe('cross-profile OAuth failure matrix', () => {
+  const providers = Object.keys(OAUTH_CONFIGS);
+  const matrix = [
+    {
+      name: 'url-not-displayed',
+      expectedBranch: 'URL_NOT_DISPLAYED',
+      snapshot: () => [
+        ev(OAuthTracePhase.BinarySpawn),
+        ev(OAuthTracePhase.BinaryExit, { data: { code: 0 } }),
+      ],
+      hint: '--verbose',
+    },
+    {
+      name: 'callback-not-observed',
+      expectedBranch: 'CALLBACK_NEVER_OBSERVED',
+      snapshot: () => [
+        ev(OAuthTracePhase.AuthUrlDisplayed),
+        ev(OAuthTracePhase.BrowserOpened),
+        ev(OAuthTracePhase.BinaryExit, { data: { code: 0 } }),
+      ],
+      hint: '--no-browser',
+    },
+    {
+      name: 'binary-error',
+      expectedBranch: 'BINARY_ERROR_EXIT',
+      snapshot: () => [
+        ev(OAuthTracePhase.BinarySpawn),
+        ev(OAuthTracePhase.BinaryExit, { data: { code: 2, stderrTail: 'boom' } }),
+      ],
+      hint: '--verbose',
+    },
+    {
+      name: 'token-exchange-error',
+      expectedBranch: 'TOKEN_EXCHANGE_REJECTED',
+      snapshot: () => [
+        ev(OAuthTracePhase.PasteCallbackSubmitted),
+        ev(OAuthTracePhase.Error, {
+          error: { code: 'CALLBACK_REJECTED', message: 'invalid_grant' },
+        }),
+      ],
+      hint: '--verbose',
+    },
+    {
+      name: 'session-expired',
+      expectedBranch: 'TIMEOUT',
+      snapshot: () => [
+        ev(OAuthTracePhase.PasteCallbackPrompted),
+        ev(OAuthTracePhase.Timeout, { data: { timeoutMs: 600000 } }),
+      ],
+      hint: '--auth',
+    },
+    {
+      name: 'token-file-missing',
+      expectedBranch: 'TOKEN_FILE_MISSING_POST_EXIT',
+      snapshot: () => [
+        ev(OAuthTracePhase.AuthUrlDisplayed),
+        ev(OAuthTracePhase.BrowserOpened),
+        ev(OAuthTracePhase.CallbackObservedHeuristic),
+        ev(OAuthTracePhase.BinaryExit, { data: { code: 0 } }),
+        ev(OAuthTracePhase.TokenFileMissing),
+      ],
+      hint: 'ccs update',
+    },
+  ] as const;
+
+  test.each(providers.flatMap((provider) => matrix.map((scenario) => ({ provider, scenario }))))(
+    '$provider $scenario.name emits branch identifier and remediation hint',
+    ({ provider, scenario }) => {
+      reset();
+      const diagnosis = diagnoseFailure(scenario.snapshot());
+      expect(diagnosis.branchId).toBe(scenario.expectedBranch);
+
+      const message = formatErrorMessage(diagnosis, {
+        verbose: false,
+        platform: 'linux',
+        callbackPort: 1455,
+        provider,
+      }).join('\n');
+      expect(message).toContain(scenario.hint);
+      expect(message.includes(`ccs ${provider}`) || message.includes('ccs update')).toBe(true);
+    }
+  );
 });

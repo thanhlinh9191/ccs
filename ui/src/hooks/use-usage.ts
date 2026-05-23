@@ -123,6 +123,7 @@ export interface MonthlyUsage {
 export interface UsageQueryOptions {
   startDate?: Date;
   endDate?: Date;
+  profile?: string;
   limit?: number;
   offset?: number;
 }
@@ -150,43 +151,52 @@ function buildUsageUrl(path: string, params: URLSearchParams): string {
   return query ? `${path}?${query}` : path;
 }
 
+function appendDateParams(params: URLSearchParams, options?: UsageQueryOptions): void {
+  if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
+  if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+}
+
+function appendProfileParam(params: URLSearchParams, options?: UsageQueryOptions): void {
+  if (options?.profile) params.append('profile', options.profile);
+}
+
 export const usageApi = {
   summary: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<UsageSummary>(buildUsageUrl('/usage/summary', params));
   },
   trends: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<DailyUsage[]>(buildUsageUrl('/usage/daily', params));
   },
   hourly: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<HourlyUsage[]>(buildUsageUrl('/usage/hourly', params));
   },
   models: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<ModelUsage[]>(buildUsageUrl('/usage/models', params));
   },
   sessions: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.offset) params.append('offset', options.offset.toString());
+    appendProfileParam(params, options);
     return request<PaginatedSessions>(buildUsageUrl('/usage/sessions', params));
   },
   monthly: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<MonthlyUsage[]>(buildUsageUrl('/usage/monthly', params));
   },
   /** Clear server-side usage cache and force fresh data fetch */
@@ -204,8 +214,8 @@ export const usageApi = {
   /** Get usage insights including anomaly detection */
   insights: (options?: UsageQueryOptions) => {
     const params = new URLSearchParams();
-    if (options?.startDate) params.append('since', formatDateForApi(options.startDate));
-    if (options?.endDate) params.append('until', formatDateForApi(options.endDate));
+    appendDateParams(params, options);
+    appendProfileParam(params, options);
     return request<UsageInsights>(buildUsageUrl('/usage/insights', params));
   },
 };

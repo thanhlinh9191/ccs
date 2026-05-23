@@ -18,6 +18,11 @@ import ProfileDetector from '../auth/profile-detector';
 import { getClaudeConfigDir, getClaudeSettingsPath } from '../utils/claude-config-path';
 import { extractOption, hasAnyFlag } from './arg-extractor';
 import { resolveClaudeExtensionSetup } from '../shared/claude-extension-setup';
+import {
+  CODEX_TRANSLATOR_URL_MARKER,
+  findCodexTranslatorUrlPaths,
+  formatSettingsPathList,
+} from '../shared/stale-codex-translator-settings';
 
 interface PersistCommandArgs {
   profile?: string;
@@ -37,6 +42,16 @@ interface ResolvedEnv {
   notes?: string[];
 }
 
+interface PersistReceipt {
+  clearedKeys: string[];
+  clearedCodexTranslatorUrlKeys: string[];
+  writtenKeys: string[];
+  unchangedWrittenKeys: string[];
+  writtenSettings: string[];
+  unchangedSettings: string[];
+  codexTranslatorUrlPaths: string[];
+}
+
 const PERSIST_KNOWN_FLAGS = [
   '--yes',
   '-y',
@@ -54,6 +69,7 @@ const PERSIST_LOCK_STALE_MS = 10000;
 const PERSIST_LOCK_RETRIES = 5;
 const PERSIST_LOCK_RETRY_MIN_MS = 100;
 const PERSIST_LOCK_RETRY_MAX_MS = 500;
+const NATIVE_CODEX_TARGETS = ['ccsxp', 'ccs codex --target codex'];
 
 type PermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 
@@ -509,6 +525,96 @@ function isSensitiveEnvKey(key: string): boolean {
   );
 }
 
+function buildPersistReceipt(
+  existingEnv: Record<string, string>,
+  existingSettings: Record<string, unknown>,
+  mergedSettings: Record<string, unknown>,
+  resolved: ResolvedEnv,
+  resolvedPermissionMode?: PermissionMode
+): PersistReceipt {
+  const mergedEnv =
+    typeof mergedSettings.env === 'object' &&
+    mergedSettings.env !== null &&
+    !Array.isArray(mergedSettings.env)
+      ? (mergedSettings.env as Record<string, string>)
+      : {};
+
+  const clearedKeys = resolved.clearEnvKeys.filter(
+    (key) => Object.prototype.hasOwnProperty.call(existingEnv, key) && mergedEnv[key] === undefined
+  );
+  const clearedCodexTranslatorUrlKeys = clearedKeys.filter(
+    (key) => findCodexTranslatorUrlPaths(existingEnv[key]).length > 0
+  );
+  const writtenKeys = Object.entries(resolved.env)
+    .filter(([key, value]) => existingEnv[key] !== value)
+    .map(([key]) => key)
+    .sort((left, right) => left.localeCompare(right));
+  const unchangedWrittenKeys = Object.entries(resolved.env)
+    .filter(([key, value]) => existingEnv[key] === value)
+    .map(([key]) => key)
+    .sort((left, right) => left.localeCompare(right));
+  const existingPermissions =
+    typeof existingSettings.permissions === 'object' &&
+    existingSettings.permissions !== null &&
+    !Array.isArray(existingSettings.permissions)
+      ? (existingSettings.permissions as Record<string, unknown>)
+      : {};
+  const writtenSettings =
+    resolvedPermissionMode && existingPermissions.defaultMode !== resolvedPermissionMode
+      ? ['permissions.defaultMode']
+      : [];
+  const unchangedSettings =
+    resolvedPermissionMode && existingPermissions.defaultMode === resolvedPermissionMode
+      ? ['permissions.defaultMode']
+      : [];
+
+  return {
+    clearedKeys,
+    clearedCodexTranslatorUrlKeys,
+    writtenKeys,
+    unchangedWrittenKeys,
+    writtenSettings,
+    unchangedSettings,
+    codexTranslatorUrlPaths: findCodexTranslatorUrlPaths(mergedSettings),
+  };
+}
+
+function formatKeyList(keys: string[]): string {
+  return keys.length > 0 ? keys.join(', ') : 'none';
+}
+
+function printPersistReceipt(receipt: PersistReceipt): void {
+  console.log(subheader('Config Receipt'));
+  console.log(`  Settings: ${getClaudeSettingsDisplayPath()}`);
+  console.log(`  Cleared managed keys: ${formatKeyList(receipt.clearedKeys)}`);
+  console.log(`  Written/rewritten managed keys: ${formatKeyList(receipt.writtenKeys)}`);
+  if (receipt.unchangedWrittenKeys.length > 0) {
+    console.log(`  Already current keys: ${formatKeyList(receipt.unchangedWrittenKeys)}`);
+  }
+  if (receipt.writtenSettings.length > 0 || receipt.unchangedSettings.length > 0) {
+    console.log(`  Written/rewritten managed settings: ${formatKeyList(receipt.writtenSettings)}`);
+    if (receipt.unchangedSettings.length > 0) {
+      console.log(`  Already current settings: ${formatKeyList(receipt.unchangedSettings)}`);
+    }
+  }
+
+  const hadCodexTranslatorCleanup = receipt.clearedCodexTranslatorUrlKeys.length > 0;
+  if (receipt.codexTranslatorUrlPaths.length > 0) {
+    console.log(
+      warn(
+        `  Codex translator URL: still found at ${formatSettingsPathList(
+          receipt.codexTranslatorUrlPaths
+        )} (${CODEX_TRANSLATOR_URL_MARKER})`
+      )
+    );
+  } else {
+    console.log(ok('  Codex translator URL: not found'));
+  }
+  if (hadCodexTranslatorCleanup || receipt.codexTranslatorUrlPaths.length > 0) {
+    console.log(`  Native Codex target: ${NATIVE_CODEX_TARGETS.join(' or ')}`);
+  }
+}
+
 /** Resolve shared Claude settings payload for a profile */
 async function resolveProfileEnvVars(profileName: string): Promise<ResolvedEnv> {
   const setup = await resolveClaudeExtensionSetup(profileName);
@@ -680,7 +786,7 @@ async function showHelp(): Promise<void> {
   console.log('');
   console.log(subheader('Supported Profile Types'));
   console.log(`  ${color('API profiles', 'command')}      glm, km, custom API profiles`);
-  console.log(`  ${color('CLIProxy', 'command')}          gemini, codex, agy, qwen, kiro, ghcp`);
+  console.log(`  ${color('CLIProxy', 'command')}          gemini, agy, qwen, kiro, ghcp`);
   console.log(`  ${color('Copilot', 'command')}           copilot (requires copilot-api daemon)`);
   console.log(
     `  ${color('Account profiles', 'command')}  work, personal, client (persists CLAUDE_CONFIG_DIR)`
@@ -700,7 +806,7 @@ async function showHelp(): Promise<void> {
   console.log(`  ${color('ccs persist glm --permission-mode acceptEdits', 'command')}`);
   console.log('');
   console.log(`  ${dim('# Persist with auto-approve enabled')}`);
-  console.log(`  ${color('ccs persist codex --dangerously-skip-permissions', 'command')}`);
+  console.log(`  ${color('ccs persist glm --dangerously-skip-permissions', 'command')}`);
   console.log('');
   console.log(`  ${dim('# Persist an account profile for IDE/native Claude use')}`);
   console.log(`  ${color('ccs persist work --yes', 'command')}`);
@@ -719,6 +825,9 @@ async function showHelp(): Promise<void> {
   console.log('');
   console.log(subheader('Notes'));
   console.log('  [i] CLIProxy profiles require the proxy to be running.');
+  console.log(
+    '  [i] Codex CLIProxy profiles are native Codex-only: use ccsxp or ccs codex --target codex.'
+  );
   console.log('  [i] Copilot profiles require copilot-api daemon.');
   console.log(
     '  [i] Account/default flows remove stale ANTHROPIC_* overrides before applying new setup.'
@@ -924,6 +1033,22 @@ export async function handlePersistCommand(args: string[]): Promise<void> {
       }
 
       await writeClaudeSettings(mergedSettings);
+      const persistedSettings = await readClaudeSettings();
+      const receipt = buildPersistReceipt(
+        existingEnv,
+        existingSettings,
+        persistedSettings,
+        resolved,
+        resolvedPermissionMode
+      );
+
+      console.log('');
+      console.log(
+        ok(`Profile '${parsedArgs.profile}' written to ${getClaudeSettingsDisplayPath()}`)
+      );
+      console.log('');
+      printPersistReceipt(receipt);
+      console.log('');
     });
   } catch (error) {
     const message = (error as Error).message;
@@ -940,9 +1065,6 @@ export async function handlePersistCommand(args: string[]): Promise<void> {
     }
     process.exit(1);
   }
-  console.log('');
-  console.log(ok(`Profile '${parsedArgs.profile}' written to ${getClaudeSettingsDisplayPath()}`));
-  console.log('');
   console.log(info('Claude Code will now use this profile by default.'));
   console.log(dim('    To revert, restore the backup or edit settings.json manually.'));
   console.log('');

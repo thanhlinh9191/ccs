@@ -281,7 +281,16 @@ export const CLIPROXY_SUBCOMMANDS = [
   'resume',
 ] as const;
 export const CONFIG_SUBCOMMANDS = ['auth', 'channels', 'image-analysis', 'thinking'] as const;
-export const DOCKER_SUBCOMMANDS = ['up', 'down', 'status', 'update', 'logs', 'config'] as const;
+export const DOCKER_SUBCOMMANDS = [
+  'up',
+  'down',
+  'status',
+  'update',
+  'logs',
+  'config',
+  'show-key',
+  'finalize-key-rotation',
+] as const;
 export const PROXY_SUBCOMMANDS = ['start', 'stop', 'status', 'activate'] as const;
 export const TOKENS_FLAGS = [
   '--show',

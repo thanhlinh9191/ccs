@@ -15,6 +15,7 @@ import { getDeniedModelIdReasonForProvider } from '../ai-providers/model-id-norm
 import { getAuthDir, getProviderAuthDir, getConfigPathForPort } from './path-resolver';
 import { CLIPROXY_DEFAULT_PORT } from './port-manager';
 import { loadOrCreateUnifiedConfig } from '../../config/config-loader-facade';
+import { getActiveDockerLegacyApiKeys } from '../../docker/docker-key-rotation';
 
 /** Internal API key for CCS-managed requests */
 export const CCS_INTERNAL_API_KEY = 'ccs-internal-managed';
@@ -623,8 +624,12 @@ function generateUnifiedConfigContent(
   const effectiveApiKey = getEffectiveApiKey();
   const effectiveSecret = getEffectiveManagementSecret();
 
-  // Build api-keys section with internal key + preserved user keys
-  const allApiKeys = [effectiveApiKey, ...userApiKeys];
+  // Build api-keys section with internal key + preserved user keys.
+  // Docker upgrades may temporarily keep the historical default key as a
+  // compatibility grace key; the marker file controls when that is active.
+  const allApiKeys = Array.from(
+    new Set([effectiveApiKey, ...getActiveDockerLegacyApiKeys(), ...userApiKeys])
+  );
   const apiKeysYaml = allApiKeys.map((key) => `  - "${key}"`).join('\n');
 
   // Unified config with enhanced CLIProxyAPI features

@@ -6,11 +6,14 @@ import {
   stringifyTomlObject,
   writeTomlFileAtomic,
 } from '../web-server/services/compatible-cli-toml-file-service';
+import { getModelMaxLevel } from '../cliproxy/model-catalog';
+import { parseCodexModelTuningAlias } from '../cliproxy/ai-providers/model-id-normalizer';
 
 export const CCSXP_CLIPROXY_SHORTCUT_ENV = 'CCSXP_CLIPROXY_SHORTCUT';
 export const CODEX_CLIPROXY_PROVIDER_ID = 'cliproxy';
 export const CODEX_CLIPROXY_PROVIDER_ENV_KEY = 'CLIPROXY_API_KEY';
 export const CODEX_CLIPROXY_PROVIDER_NAME = 'CLIProxy Codex';
+const CODEX_FAST_SERVICE_TIER = 'priority';
 
 export interface CodexCliproxyProviderRepairResult {
   changed: boolean;
@@ -47,22 +50,16 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function normalizeLocalProviderUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
+function isValidCodexCliproxyBaseUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
   const trimmed = value.trim();
+  if (!trimmed) return false;
   try {
     const url = new URL(trimmed);
-    if (
-      (url.hostname === 'localhost' || url.hostname === '127.0.0.1') &&
-      url.pathname === '/api/provider/codex'
-    ) {
-      url.hostname = '127.0.0.1';
-      return url.toString().replace(/\/$/, '');
-    }
+    return url.protocol === 'http:' || url.protocol === 'https:';
   } catch {
-    return null;
+    return false;
   }
-  return null;
 }
 
 function resolveProviderEnvKey(provider: Record<string, unknown> | null): string {
@@ -73,14 +70,10 @@ function resolveProviderEnvKey(provider: Record<string, unknown> | null): string
   return CODEX_CLIPROXY_PROVIDER_ENV_KEY;
 }
 
-function isProviderReady(
-  provider: Record<string, unknown>,
-  expectedBaseUrl: string,
-  envKey: string
-): boolean {
+function isProviderReady(provider: Record<string, unknown>, envKey: string): boolean {
   return (
     provider.name === CODEX_CLIPROXY_PROVIDER_NAME &&
-    normalizeLocalProviderUrl(provider.base_url) === expectedBaseUrl &&
+    isValidCodexCliproxyBaseUrl(provider.base_url) &&
     provider.env_key === envKey &&
     provider.wire_api === 'responses' &&
     provider.requires_openai_auth === false &&
@@ -99,18 +92,39 @@ function buildProviderConfig(baseUrl: string, envKey: string): Record<string, un
   };
 }
 
-function buildProviderBlock(baseUrl: string): string {
-  return stringifyTomlObject({
-    model_providers: {
-      [CODEX_CLIPROXY_PROVIDER_ID]: buildProviderConfig(baseUrl, CODEX_CLIPROXY_PROVIDER_ENV_KEY),
-    },
-  });
+function resolveProviderBaseUrl(
+  provider: Record<string, unknown>,
+  fallbackBaseUrl: string
+): string {
+  const baseUrl = provider.base_url;
+  if (isValidCodexCliproxyBaseUrl(baseUrl)) {
+    return baseUrl.trim();
+  }
+  return fallbackBaseUrl;
 }
 
 function appendProviderBlock(rawText: string, baseUrl: string): string {
   const prefix = rawText.trimEnd();
-  const providerBlock = buildProviderBlock(baseUrl).trimEnd();
+  const providerBlock = stringifyTomlObject({
+    model_providers: {
+      [CODEX_CLIPROXY_PROVIDER_ID]: buildProviderConfig(baseUrl, CODEX_CLIPROXY_PROVIDER_ENV_KEY),
+    },
+  }).trimEnd();
   return prefix ? `${prefix}\n\n${providerBlock}\n` : `${providerBlock}\n`;
+}
+
+function normalizeTopLevelCodexModelAlias(config: Record<string, unknown>): boolean {
+  const model = config.model;
+  if (typeof model !== 'string') return false;
+
+  const parsed = parseCodexModelTuningAlias(model);
+  if (!parsed || (!parsed.effort && !parsed.serviceTier)) return false;
+  if (!parsed.baseModel || getModelMaxLevel('codex', parsed.baseModel) === undefined) return false;
+
+  config.model = parsed.baseModel;
+  if (parsed.effort) config.model_reasoning_effort = parsed.effort;
+  if (parsed.serviceTier) config.service_tier = CODEX_FAST_SERVICE_TIER;
+  return true;
 }
 
 export async function ensureCodexCliproxyProviderConfig(
@@ -131,6 +145,7 @@ export async function ensureCodexCliproxyProviderConfig(
   const modelProvidersValue = config.model_providers;
   const providers = asObject(modelProvidersValue);
   const expectedBaseUrl = buildCodexCliproxyProviderBaseUrl(port);
+  const normalizedModelAlias = normalizeTopLevelCodexModelAlias(config);
 
   if (modelProvidersValue !== undefined && !providers) {
     throw new Error(`Cannot repair ${displayPath}: [model_providers] must be a table.`);
@@ -139,7 +154,18 @@ export async function ensureCodexCliproxyProviderConfig(
   if (!providers || !Object.prototype.hasOwnProperty.call(providers, CODEX_CLIPROXY_PROVIDER_ID)) {
     await writeTomlFileAtomic({
       filePath: configPath,
-      rawText: appendProviderBlock(fileProbe.rawText, expectedBaseUrl),
+      rawText: normalizedModelAlias
+        ? stringifyTomlObject({
+            ...config,
+            model_providers: {
+              ...(providers ?? {}),
+              [CODEX_CLIPROXY_PROVIDER_ID]: buildProviderConfig(
+                expectedBaseUrl,
+                CODEX_CLIPROXY_PROVIDER_ENV_KEY
+              ),
+            },
+          })
+        : appendProviderBlock(fileProbe.rawText, expectedBaseUrl),
       expectedMtime: fileProbe.diagnostics.mtimeMs ?? undefined,
       fileLabel: 'config.toml',
     });
@@ -154,15 +180,18 @@ export async function ensureCodexCliproxyProviderConfig(
   }
 
   const envKey = resolveProviderEnvKey(currentProvider);
+  const providerReady = isProviderReady(currentProvider, envKey);
 
-  if (isProviderReady(currentProvider, expectedBaseUrl, envKey)) {
-    return { changed: false, configPath, displayPath, envKey };
+  if (!providerReady) {
+    providers[CODEX_CLIPROXY_PROVIDER_ID] = {
+      ...currentProvider,
+      ...buildProviderConfig(resolveProviderBaseUrl(currentProvider, expectedBaseUrl), envKey),
+    };
   }
 
-  providers[CODEX_CLIPROXY_PROVIDER_ID] = {
-    ...currentProvider,
-    ...buildProviderConfig(expectedBaseUrl, envKey),
-  };
+  if (providerReady && !normalizedModelAlias) {
+    return { changed: false, configPath, displayPath, envKey };
+  }
 
   await writeTomlFileAtomic({
     filePath: configPath,

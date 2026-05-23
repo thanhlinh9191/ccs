@@ -220,6 +220,8 @@ function getSuggestionsForCommand(tokensBeforeCurrent: string[]): CompletionSugg
         return completeSubcommands([], ['--port', '--proxy-port', '--host', '--help', '-h']);
       if (subcommand === 'logs')
         return completeSubcommands([], ['--follow', '--service', '--host', '--help', '-h']);
+      if (subcommand === 'show-key')
+        return completeSubcommands([], ['--full', '--host', '--help', '-h']);
       return completeSubcommands([], COMMAND_FLAG_SUGGESTIONS.docker);
     case 'browser':
       if (!subcommand || subcommand.startsWith('-')) {

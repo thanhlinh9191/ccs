@@ -5,6 +5,8 @@ import * as path from 'path';
 import type { ProxyTarget } from '../../proxy/proxy-target-resolver';
 import { InteractivePrompt } from '../../../utils/prompt';
 import { getCapturedFetchRequests, mockFetch, restoreFetch } from '../../../../tests/mocks';
+import { createOAuthTraceRecorder } from '../oauth-trace/trace-recorder';
+import { OAuthTracePhase } from '../oauth-trace/trace-events';
 
 const remoteTarget: ProxyTarget = {
   host: 'proxy.example.com',
@@ -288,6 +290,113 @@ describe('resolvePasteCallbackAuthUrl', () => {
     );
     expect(request.method).toBe('GET');
     expect(request.headers['Authorization']).toBe('Bearer test-mgmt-key');
+  });
+});
+
+describe('handlePasteCallbackMode traceability', () => {
+  it('records paste-callback lifecycle events and redacts callback secrets on exchange rejection', async () => {
+    mockFetch([
+      {
+        url: /\/v0\/management\/codex-auth-url\?is_webui=true$/,
+        response: {
+          auth_url:
+            'https://auth.example.com/authorize?client_id=public&state=upstream-state-secret',
+          state: 'upstream-state-secret',
+        },
+      },
+      {
+        url: /\/v0\/management\/oauth-callback$/,
+        response: { status: 'error', error: 'invalid_grant: expired code' },
+        status: 400,
+      },
+    ]);
+
+    const trace = createOAuthTraceRecorder({
+      sessionId: 'paste-test',
+      provider: 'codex',
+      verbose: false,
+    });
+    const { handlePasteCallbackMode } = await import(
+      `../oauth-handler?paste-trace-rejected=${Date.now()}`
+    );
+
+    const result = await handlePasteCallbackMode(
+      'codex',
+      { provider: 'codex', displayName: 'Codex', authUrl: '', scopes: [], authFlag: '' },
+      false,
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-paste-trace-rejected-')),
+      undefined,
+      undefined,
+      {
+        trace,
+        promptForCallbackUrl: async () =>
+          'http://localhost:1455/callback?code=oauth-code-secret&state=upstream-state-secret',
+      }
+    );
+
+    expect(result).toBeNull();
+    expect(trace.snapshot().map((event) => event.phase)).toEqual([
+      OAuthTracePhase.AuthUrlDisplayed,
+      OAuthTracePhase.PasteCallbackPrompted,
+      OAuthTracePhase.PasteCallbackReceived,
+      OAuthTracePhase.PasteCallbackSubmitted,
+      OAuthTracePhase.Error,
+    ]);
+    expect(JSON.stringify(trace.snapshot())).not.toContain('oauth-code-secret');
+    expect(JSON.stringify(trace.snapshot())).not.toContain('upstream-state-secret');
+  });
+
+  it('records token exchange and token-file-missing when callback succeeds without a local token', async () => {
+    mockFetch([
+      {
+        url: /\/v0\/management\/codex-auth-url\?is_webui=true$/,
+        response: {
+          auth_url: 'https://auth.example.com/authorize?client_id=public&state=state-123',
+          state: 'state-123',
+        },
+      },
+      {
+        url: /\/v0\/management\/oauth-callback$/,
+        response: { status: 'ok' },
+      },
+      {
+        url: /\/v0\/management\/get-auth-status\?state=state-123$/,
+        response: { status: 'ok' },
+      },
+    ]);
+
+    const trace = createOAuthTraceRecorder({
+      sessionId: 'paste-test-missing-token',
+      provider: 'codex',
+      verbose: false,
+    });
+    const { handlePasteCallbackMode } = await import(
+      `../oauth-handler?paste-trace-token-missing=${Date.now()}`
+    );
+
+    const result = await handlePasteCallbackMode(
+      'codex',
+      { provider: 'codex', displayName: 'Codex', authUrl: '', scopes: [], authFlag: '' },
+      false,
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-paste-trace-token-missing-')),
+      undefined,
+      undefined,
+      {
+        trace,
+        promptForCallbackUrl: async () =>
+          'http://localhost:1455/callback?code=oauth-code-secret&state=state-123',
+        timeoutMs: 5,
+        pollIntervalMs: 1,
+      }
+    );
+
+    expect(result).toBeNull();
+    expect(trace.snapshot().map((event) => event.phase)).toContain(
+      OAuthTracePhase.TokenExchangePending
+    );
+    expect(trace.snapshot().map((event) => event.phase)).toContain(
+      OAuthTracePhase.TokenFileMissing
+    );
   });
 });
 

@@ -130,7 +130,7 @@ function formatModelOption(model: ModelEntry): string {
   return `${model.name}${tierBadge}`;
 }
 
-const CODEX_EFFORTS_IN_ORDER = ['medium', 'high', 'xhigh'] as const;
+const CODEX_EFFORTS_IN_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 type CodexSelectableEffort = (typeof CODEX_EFFORTS_IN_ORDER)[number];
 
 function getCodexSelectableEfforts(model: ModelEntry): CodexSelectableEffort[] {

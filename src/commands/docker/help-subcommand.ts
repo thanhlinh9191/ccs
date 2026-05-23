@@ -19,6 +19,8 @@ export async function showHelp(): Promise<void> {
         ['update', 'Update CCS and CLIProxy inside the running container'],
         ['logs', 'Show or follow container log output'],
         ['config', 'Show bundled asset paths and deployment defaults'],
+        ['show-key', 'Show the Docker CLIProxy API key masked by default'],
+        ['finalize-key-rotation', 'End the legacy Docker API key grace period'],
       ],
     ],
     [
@@ -35,6 +37,7 @@ export async function showHelp(): Promise<void> {
         ['up --proxy-port <port>', 'Publish CLIProxy on a custom host port'],
         ['logs --follow', 'Stream logs continuously'],
         ['logs --service <name>', 'Filter logs to ccs or cliproxy'],
+        ['show-key --full', 'Reveal the full Docker CLIProxy API key'],
       ],
     ],
     [
@@ -45,6 +48,9 @@ export async function showHelp(): Promise<void> {
         ['ccs docker --host my-box status', 'Use the documented common-option ordering'],
         ['ccs docker up --host my-box', 'Stage assets to ~/.ccs/docker and deploy remotely'],
         ['ccs docker logs --follow --service ccs', 'Tail dashboard logs only'],
+        ['ccs docker show-key', 'Print the masked CLIProxy API key from the container'],
+        ['ccs docker show-key --full', 'Reveal the full CLIProxy API key'],
+        ['ccs docker finalize-key-rotation', 'Remove the legacy key immediately'],
         ['ccs docker update --host my-box', 'Update the running remote stack in place'],
       ],
     ],

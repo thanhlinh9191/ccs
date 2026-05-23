@@ -112,7 +112,7 @@ const defaultCliproxyImageAnalysisDeps: CliproxyImageAnalysisDeps = {
   getLocalRuntimeApiKey: getEffectiveApiKey,
 };
 
-const CODEX_EFFORT_SUFFIX_REGEX = /^(.*)-(xhigh|high|medium)$/i;
+const CODEX_EFFORT_SUFFIX_REGEX = /^(.*)-(minimal|low|medium|high|xhigh)$/i;
 const EXTENDED_CONTEXT_SUFFIX_REGEX = /\[1m\]$/i;
 
 function normalizeCodexModelForDirectUpstream(model: string): string {

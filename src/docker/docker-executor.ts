@@ -124,6 +124,11 @@ function runStreaming(command: string, args: string[]): Promise<void> {
   });
 }
 
+function sleepSync(ms: number): void {
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, ms);
+}
+
 let cachedLocalComposePrefix: string[] | undefined;
 
 function resolveLocalComposePrefix(): string[] {
@@ -202,6 +207,9 @@ export class DockerExecutor {
           CCS_NPM_VERSION: this.getInstalledCcsVersion(),
           CCS_DASHBOARD_PORT: String(options.port),
           CCS_CLIPROXY_PORT: String(options.proxyPort),
+          CCS_DOCKER_BIND_HOST: process.env.CCS_DOCKER_BIND_HOST || '127.0.0.1',
+          CCS_DOCKER_LEGACY_KEY_GRACE_DAYS: process.env.CCS_DOCKER_LEGACY_KEY_GRACE_DAYS || '',
+          CCS_DOCKER_RESTORE_LEGACY_API_KEY: process.env.CCS_DOCKER_RESTORE_LEGACY_API_KEY || '',
         },
         REMOTE_DOCKER_BUILD_TIMEOUT_MS
       ),
@@ -262,6 +270,58 @@ export class DockerExecutor {
     const result = this.runDocker(['exec', DOCKER_CONTAINER_NAME, 'sh', '-lc', command], options);
     this.ensureSuccess(result, 'Docker log retrieval', options);
     return result.stdout;
+  }
+
+  showKey(options: DockerCommandTarget, full: boolean): string {
+    const args = [
+      'exec',
+      DOCKER_CONTAINER_NAME,
+      'ccs',
+      'docker',
+      'show-key',
+      '--container-scope',
+      ...(full ? ['--full'] : []),
+    ];
+    const result = this.runDocker(args, options);
+    this.ensureSuccess(result, 'Docker key display', options);
+    return result.stdout;
+  }
+
+  finalizeKeyRotation(options: DockerCommandTarget): string {
+    const result = this.runDocker(
+      [
+        'exec',
+        DOCKER_CONTAINER_NAME,
+        'ccs',
+        'docker',
+        'finalize-key-rotation',
+        '--container-scope',
+      ],
+      options
+    );
+    this.ensureSuccess(result, 'Docker key rotation finalization', options);
+    return result.stdout;
+  }
+
+  getKeyRotationBanner(options: DockerCommandTarget): string {
+    const args = [
+      'exec',
+      DOCKER_CONTAINER_NAME,
+      'ccs',
+      'docker',
+      'show-key',
+      '--container-scope',
+      '--full',
+      '--banner-only',
+    ];
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const result = this.runDocker(args, options, LOCAL_DOCKER_SYNC_TIMEOUT_MS);
+      if (result.exitCode === 0) {
+        return result.stdout.trim();
+      }
+      sleepSync(500);
+    }
+    return '';
   }
 
   private stageRemoteAssets(host: string): void {

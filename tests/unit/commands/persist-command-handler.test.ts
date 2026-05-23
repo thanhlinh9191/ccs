@@ -58,7 +58,11 @@ async function createRestoreFixture(
   };
 
   await fs.promises.mkdir(claudeDir, { recursive: true });
-  await fs.promises.writeFile(settingsPath, JSON.stringify(originalSettings, null, 2) + '\n', 'utf8');
+  await fs.promises.writeFile(
+    settingsPath,
+    JSON.stringify(originalSettings, null, 2) + '\n',
+    'utf8'
+  );
   await fs.promises.writeFile(backupPath, JSON.stringify(backupSettings, null, 2) + '\n', 'utf8');
 
   return { claudeDir, settingsPath, backupPath, timestamp, originalSettings, backupSettings };
@@ -98,15 +102,15 @@ afterEach(async () => {
 
 describe('persist command real handler paths', () => {
   it('throws parseError for missing --permission-mode before profile detection', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['glm', '--permission-mode']))).rejects.toThrow(
-      'Missing value for --permission-mode'
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['glm', '--permission-mode']))
+    ).rejects.toThrow('Missing value for --permission-mode');
   });
 
   it('throws parseError for empty inline --permission-mode before profile detection', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['glm', '--permission-mode=']))).rejects.toThrow(
-      'Missing value for --permission-mode'
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['glm', '--permission-mode=']))
+    ).rejects.toThrow('Missing value for --permission-mode');
   });
 
   it('throws parseError for invalid --permission-mode before profile detection', async () => {
@@ -116,34 +120,36 @@ describe('persist command real handler paths', () => {
   });
 
   it('throws parseError for unknown flags on real handler path', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['glm', '--unknown-flag']))).rejects.toThrow(
-      /Unknown option\(s\)/
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['glm', '--unknown-flag']))
+    ).rejects.toThrow(/Unknown option\(s\)/);
   });
 
   it('throws parseError for list/restore conflict on real handler path', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['--list-backups', '--restore']))).rejects.toThrow(
-      '--list-backups cannot be used with --restore'
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['--list-backups', '--restore']))
+    ).rejects.toThrow('--list-backups cannot be used with --restore');
   });
 
   it('throws parseError for permission flags with --restore on real handler path', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['--restore', '--auto-approve']))).rejects.toThrow(
-      /Permission flags are not valid with backup operations/
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['--restore', '--auto-approve']))
+    ).rejects.toThrow(/Permission flags are not valid with backup operations/);
   });
 
   it('shows help when --help is present even with other invalid args', async () => {
-    await expect(withScopedHome(() => handlePersistCommand(['--help', '--permission-mode']))).resolves.toBeUndefined();
+    await expect(
+      withScopedHome(() => handlePersistCommand(['--help', '--permission-mode']))
+    ).resolves.toBeUndefined();
   });
 
   it('does not create CLAUDE_CONFIG_DIR on parseError path', async () => {
     const isolatedClaudeDir = path.join(tempRoot, '.claude-parse-early');
     process.env.CLAUDE_CONFIG_DIR = isolatedClaudeDir;
 
-    await expect(withScopedHome(() => handlePersistCommand(['glm', '--permission-mode=']))).rejects.toThrow(
-      'Missing value for --permission-mode'
-    );
+    await expect(
+      withScopedHome(() => handlePersistCommand(['glm', '--permission-mode=']))
+    ).rejects.toThrow('Missing value for --permission-mode');
     expect(await pathExists(isolatedClaudeDir)).toBe(false);
   });
 });
@@ -294,6 +300,10 @@ describe('persist command Claude extension parity', () => {
       type: 'api',
       settings: path.join(tempRoot, '.ccs', 'glm.settings.json'),
     };
+    config.cliproxy.variants.codex = {
+      provider: 'codex',
+      settings: path.join(tempRoot, '.ccs', 'codex.settings.json'),
+    };
 
     await fs.promises.mkdir(path.join(tempRoot, '.ccs'), { recursive: true });
     await fs.promises.writeFile(
@@ -361,6 +371,7 @@ describe('persist command Claude extension parity', () => {
         {
           env: {
             ANTHROPIC_AUTH_TOKEN: 'stale-token',
+            ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317/api/provider/codex',
             ANTHROPIC_MODEL: 'stale-model',
             KEEP_ME: 'still-here',
           },
@@ -371,7 +382,17 @@ describe('persist command Claude extension parity', () => {
       'utf8'
     );
 
-    await withScopedHome(() => handlePersistCommand(['default', '--yes']));
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() => handlePersistCommand(['default', '--yes']));
+    } finally {
+      console.log = originalConsoleLog;
+    }
 
     const persisted = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8')) as {
       env: Record<string, string>;
@@ -379,8 +400,266 @@ describe('persist command Claude extension parity', () => {
 
     expect(persisted.env.KEEP_ME).toBe('still-here');
     expect(persisted.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(persisted.env.ANTHROPIC_BASE_URL).toBeUndefined();
     expect(persisted.env.ANTHROPIC_MODEL).toBeUndefined();
     expect(persisted.env.CLAUDE_CONFIG_DIR).toBe(path.join(tempRoot, '.ccs', 'instances', 'work'));
     expect(fs.existsSync(persisted.env.CLAUDE_CONFIG_DIR)).toBe(true);
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Config Receipt');
+    expect(renderedLogs).toContain(
+      'Cleared managed keys: ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL'
+    );
+    expect(renderedLogs).toContain('Written/rewritten managed keys: CLAUDE_CONFIG_DIR');
+    expect(renderedLogs).toContain('Codex translator URL: not found');
+    expect(renderedLogs).toContain('Native Codex target: ccsxp or ccs codex --target codex');
+  });
+
+  it('warns in the persist receipt when a Codex translator URL remains in settings', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            KEEP_ME: 'still-here',
+          },
+          custom: {
+            staleUrl: 'http://127.0.0.1:8317/api/provider/codex',
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() => handlePersistCommand(['default', '--yes']));
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Config Receipt');
+    expect(renderedLogs).toContain(
+      'Codex translator URL: still found at custom.staleUrl (/api/provider/codex)'
+    );
+    expect(renderedLogs).toContain('Native Codex target: ccsxp or ccs codex --target codex');
+  });
+
+  it('reports already-current account continuity without Codex target guidance', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    const instancePath = path.join(tempRoot, '.ccs', 'instances', 'work');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            CLAUDE_CONFIG_DIR: instancePath,
+            KEEP_ME: 'still-here',
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() => handlePersistCommand(['default', '--yes']));
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Cleared managed keys: none');
+    expect(renderedLogs).toContain('Written/rewritten managed keys: none');
+    expect(renderedLogs).toContain('Already current keys: CLAUDE_CONFIG_DIR');
+    expect(renderedLogs).toContain('Codex translator URL: not found');
+    expect(renderedLogs).not.toContain('Native Codex target:');
+  });
+
+  it('reports written permission defaultMode without exposing the mode value', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            KEEP_ME: 'still-here',
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() =>
+        handlePersistCommand(['glm', '--yes', '--permission-mode', 'acceptEdits'])
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Written/rewritten managed settings: permissions.defaultMode');
+    expect(renderedLogs).not.toContain('Already current settings: permissions.defaultMode');
+    expect(renderedLogs).not.toContain('permissions.defaultMode: acceptEdits');
+  });
+
+  it('reports already-current permission defaultMode without exposing the mode value', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            KEEP_ME: 'still-here',
+          },
+          permissions: {
+            defaultMode: 'acceptEdits',
+            allow: ['Bash(ls:*)'],
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() =>
+        handlePersistCommand(['glm', '--yes', '--permission-mode', 'acceptEdits'])
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Written/rewritten managed settings: none');
+    expect(renderedLogs).toContain('Already current settings: permissions.defaultMode');
+    expect(renderedLogs).not.toContain('permissions.defaultMode: acceptEdits');
+  });
+
+  it('does not print native Codex target guidance for non-Codex profile persistence', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            KEEP_ME: 'still-here',
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await withScopedHome(() => handlePersistCommand(['glm', '--yes']));
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Config Receipt');
+    expect(renderedLogs).toContain('Codex translator URL: not found');
+    expect(renderedLogs).not.toContain('Native Codex target:');
+  });
+
+  it('blocks Codex CLIProxy profiles from Claude settings persistence', async () => {
+    await writeUnifiedConfig();
+
+    const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          env: {
+            KEEP_ME: 'still-here',
+          },
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    const originalConsoleLog = console.log;
+    const capturedLogs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      capturedLogs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    stubProcessExit();
+    try {
+      await expect(withScopedHome(() => handlePersistCommand(['codex', '--yes']))).rejects.toThrow(
+        'process.exit(1)'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    const renderedLogs = capturedLogs.join('\n');
+    expect(renderedLogs).toContain('Codex CLIProxy profile');
+    expect(renderedLogs).toContain('ccsxp');
+    expect(renderedLogs).toContain('ccs persist default --yes');
+
+    const persisted = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8')) as {
+      env: Record<string, string>;
+    };
+    expect(persisted.env.KEEP_ME).toBe('still-here');
+    expect(persisted.env.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 });

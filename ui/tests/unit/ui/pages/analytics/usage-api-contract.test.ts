@@ -37,4 +37,30 @@ describe('analytics usage API contract', () => {
     expect(urls).toContain('/api/usage/monthly?since=20260401&until=20260430');
     expect(urls.every((url) => !url.includes('months='))).toBe(true);
   });
+
+  it('serializes the selected profile for every profile-scoped usage endpoint', async () => {
+    const startDate = new Date(2026, 3, 1);
+    const endDate = new Date(2026, 3, 30);
+    const options = { startDate, endDate, profile: 'work' };
+
+    await usageApi.summary(options);
+    await usageApi.trends(options);
+    await usageApi.hourly(options);
+    await usageApi.models(options);
+    await usageApi.sessions({ ...options, limit: 50 });
+    await usageApi.insights(options);
+    await usageApi.monthly(options);
+
+    const urls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
+
+    expect(urls).toContain('/api/usage/summary?since=20260401&until=20260430&profile=work');
+    expect(urls).toContain('/api/usage/daily?since=20260401&until=20260430&profile=work');
+    expect(urls).toContain('/api/usage/hourly?since=20260401&until=20260430&profile=work');
+    expect(urls).toContain('/api/usage/models?since=20260401&until=20260430&profile=work');
+    expect(urls).toContain(
+      '/api/usage/sessions?since=20260401&until=20260430&limit=50&profile=work'
+    );
+    expect(urls).toContain('/api/usage/insights?since=20260401&until=20260430&profile=work');
+    expect(urls).toContain('/api/usage/monthly?since=20260401&until=20260430&profile=work');
+  });
 });
