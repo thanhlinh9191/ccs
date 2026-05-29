@@ -1,3 +1,9 @@
+## [8.1.4](https://github.com/kaitranntt/ccs/compare/v8.1.3...v8.1.4) (2026-05-29)
+
+### Hotfixes
+
+* avoid Docker smoke port collisions ([#1412](https://github.com/kaitranntt/ccs/issues/1412)) ([c3d8dcb](https://github.com/kaitranntt/ccs/commit/c3d8dcbdd929e29b529c40afc965fea14af15ea1))
+
 ## [8.1.3](https://github.com/kaitranntt/ccs/compare/v8.1.2...v8.1.3) (2026-05-29)
 
 ### Hotfixes
