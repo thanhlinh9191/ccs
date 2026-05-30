@@ -25,6 +25,26 @@ describe('withRetry', () => {
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
+  it('uses the default retryability check when retryableCheck is null at runtime', async () => {
+    let attempt = 0;
+    const fn = mock(() => {
+      attempt++;
+      if (attempt < 2) {
+        return Promise.reject(new RetryableError('transient failure'));
+      }
+      return Promise.resolve('ok');
+    });
+
+    const result = await withRetry(fn, {
+      maxRetries: 3,
+      baseDelayMs: 1,
+      retryableCheck: null,
+    } as unknown as RetryOptions);
+
+    expect(result).toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
   it('throws after max retries exhausted', async () => {
     const fn = mock(() => Promise.reject(new RetryableError('always fails')));
     await expect(withRetry(fn, { maxRetries: 2, baseDelayMs: 1 })).rejects.toThrow('always fails');

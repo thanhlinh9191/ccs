@@ -99,7 +99,7 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
     throw new Error('withRetry: baseDelayMs must be >= 0');
   }
 
-  const isRetryable = retryableCheck;
+  const isRetryable = retryableCheck ?? defaultRetryableCheck;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
