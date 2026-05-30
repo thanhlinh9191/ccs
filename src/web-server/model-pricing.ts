@@ -243,6 +243,12 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheCreationPerMillion: 6.25,
     cacheReadPerMillion: 0.5,
   },
+  'claude-opus-4-7-thinking': {
+    inputPerMillion: 5.0,
+    outputPerMillion: 25.0,
+    cacheCreationPerMillion: 6.25,
+    cacheReadPerMillion: 0.5,
+  },
 
   // ---------------------------------------------------------------------------
   // OpenAI Models - Source: better-ccusage
