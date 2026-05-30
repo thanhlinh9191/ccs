@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const ISSUE_REF_PATTERN = /#([0-9]+)/g;
-const ACTION_VERB_PATTERN = /\b(fixes|closes|resolves|refs?)\b(.*)/gi;
-const RESOLVE_VERB_PATTERN = /\b(fixes|closes|resolves)\b(.*)/gi;
+const ACTION_VERB_PATTERN =
+  /\b(?:fixes|closes|resolves|refs?)\b\s+(#\d+\b(?:\s*(?:,|and)?\s*#\d+\b)*)/gi;
+const RESOLVE_VERB_PATTERN =
+  /\b(?:fixes|closes|resolves)\b\s+(#\d+\b(?:\s*(?:,|and)?\s*#\d+\b)*)/gi;
 const PR_REF_PATTERN = /(?:Merge pull request #|\(#)([0-9]+)/g;
 const STABLE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
 
@@ -14,7 +16,7 @@ export function extractIssueNumbers(text, { includeRefs = true } = {}) {
 
   pattern.lastIndex = 0;
   while ((actionMatch = pattern.exec(text || '')) !== null) {
-    const tail = actionMatch[2] || '';
+    const tail = actionMatch[1] || '';
     let issueMatch;
     ISSUE_REF_PATTERN.lastIndex = 0;
     while ((issueMatch = ISSUE_REF_PATTERN.exec(tail)) !== null) {

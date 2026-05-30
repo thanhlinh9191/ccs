@@ -18,6 +18,18 @@ describe('stable release issue cleanup', () => {
     expect(extractIssueNumbers(text, { includeRefs: false })).toEqual([1340, 1341]);
   });
 
+  it('ignores unrelated issue references after the action reference sequence', () => {
+    const text = [
+      'fix: guard release parser',
+      '',
+      'Fixes #12; see #99 for the follow-up',
+      'Resolves #13, #14 and #15; related to #100',
+    ].join('\n');
+
+    expect(extractIssueNumbers(text, { includeRefs: true })).toEqual([12, 13, 14, 15]);
+    expect(extractIssueNumbers(text, { includeRefs: false })).toEqual([12, 13, 14, 15]);
+  });
+
   it('extracts PR numbers from merge and squash commit subjects', () => {
     const text = [
       'Merge pull request #1392 from kaitranntt/kai/fix/foo',
