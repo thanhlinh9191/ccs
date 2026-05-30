@@ -86,18 +86,31 @@ describe('cliproxy quota subcommand failure formatting', () => {
 });
 
 describe('cliproxy quota subcommand Codex label formatting', () => {
-  it('falls back for non-string cached Codex feature labels', async () => {
+  it('falls back to the cached window label for invalid Codex feature labels', async () => {
     const { getCodexWindowDisplayLabel } = await loadQuotaCommandTestExports();
 
-    const label = getCodexWindowDisplayLabel({
-      label: 'ignored',
-      resetAfterSeconds: 3600,
-      category: 'additional',
-      cadence: '5h',
-      featureLabel: { unexpected: true },
-    } as never);
+    const cases = [
+      { featureLabel: '', cadence: '5h', expected: 'Codex Spark (5h)' },
+      { featureLabel: '   ', cadence: 'weekly', expected: 'Codex Spark (weekly)' },
+      {
+        featureLabel: '\u001b[2J\u001b]52;c;payload\u0007',
+        cadence: '5h',
+        expected: 'Codex Spark (5h)',
+      },
+      { featureLabel: { unexpected: true }, cadence: '5h', expected: 'Codex Spark (5h)' },
+    ] as const;
 
-    expect(label).toBe('Additional (5h)');
+    for (const { featureLabel, cadence, expected } of cases) {
+      const label = getCodexWindowDisplayLabel({
+        label: 'GPT-5.3-Codex-Spark',
+        resetAfterSeconds: 3600,
+        category: 'additional',
+        cadence,
+        featureLabel,
+      } as never);
+
+      expect(label).toBe(expected);
+    }
   });
 
   it('removes terminal control characters from cached Codex feature labels', async () => {

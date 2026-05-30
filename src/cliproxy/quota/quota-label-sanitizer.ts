@@ -11,8 +11,8 @@ const TERMINAL_CONTROL_CHARS_REGEX = /[\u0000-\u001f\u007f-\u009f]/g;
  * labels must be constrained to safe, printable strings before they reach the
  * terminal.
  */
-export function sanitizeCodexFeatureLabel(value: unknown): string {
-  if (typeof value !== 'string') return CODEX_FEATURE_LABEL_FALLBACK;
+export function sanitizeCodexFeatureLabelOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
 
   const sanitized = value
     .replace(TERMINAL_ESCAPE_SEQUENCE_REGEX, '')
@@ -21,5 +21,9 @@ export function sanitizeCodexFeatureLabel(value: unknown): string {
     .slice(0, CODEX_FEATURE_LABEL_MAX_LENGTH)
     .trimEnd();
 
-  return sanitized.length > 0 ? sanitized : CODEX_FEATURE_LABEL_FALLBACK;
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+export function sanitizeCodexFeatureLabel(value: unknown): string {
+  return sanitizeCodexFeatureLabelOrNull(value) ?? CODEX_FEATURE_LABEL_FALLBACK;
 }
