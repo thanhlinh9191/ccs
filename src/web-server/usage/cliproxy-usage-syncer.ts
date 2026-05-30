@@ -15,6 +15,7 @@ import {
   buildCliproxyUsageHistoryAggregates,
   extractCliproxyUsageHistoryDetails,
   mergeCliproxyUsageHistoryDetails,
+  normalizeCliproxyUsageHistoryDetail,
   pruneCliproxyUsageHistoryDetails,
   type CliproxyUsageHistoryDetail,
 } from './cliproxy-usage-transformer';
@@ -203,14 +204,27 @@ function readSnapshot(emitWarnings = true): CliproxyUsageSnapshot | null {
         return null;
       }
 
-      if (!Array.isArray((snapshot as CliproxyUsageSnapshot).details)) {
+      const details = (snapshot as CliproxyUsageSnapshot).details;
+      if (!Array.isArray(details)) {
         if (emitWarnings) {
           console.log(info('CLIProxy snapshot details missing, will refresh on next sync'));
         }
         return null;
       }
 
-      return snapshot as CliproxyUsageSnapshot;
+      const normalizedDetails = details
+        .map((detail) => normalizeCliproxyUsageHistoryDetail(detail))
+        .filter((detail): detail is CliproxyUsageHistoryDetail => detail !== null);
+      const { daily, hourly, monthly } = buildCliproxyUsageHistoryAggregates(normalizedDetails);
+
+      return {
+        version: SNAPSHOT_VERSION,
+        timestamp: Number(snapshot.timestamp),
+        details: normalizedDetails,
+        daily,
+        hourly,
+        monthly,
+      };
     }
 
     if (snapshot.version === 1 || snapshot.version === 2) {
