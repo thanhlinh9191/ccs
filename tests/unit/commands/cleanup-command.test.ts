@@ -53,4 +53,122 @@ describe('cleanup command', () => {
       logSpy.mockRestore();
     }
   });
+
+  it('does not follow a symlinked CCS archive directory during cleanup', async () => {
+    if (process.platform === 'win32') return;
+
+    const ccsLogsDir = getNativeLogsDir();
+    const archiveDir = getLogArchiveDir();
+    const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-cleanup-victim-'));
+
+    fs.mkdirSync(ccsLogsDir, { recursive: true });
+    fs.writeFileSync(path.join(victimDir, 'keepme.log'), 'do not delete');
+    fs.symlinkSync(victimDir, archiveDir, 'dir');
+
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await handleCleanupCommand(['--force']);
+
+      const output = logSpy.mock.calls
+        .flatMap((call) => call.map((value) => String(value)))
+        .join('\n');
+
+      expect(output).toContain('No CCS or CLIProxy logs found.');
+      expect(fs.existsSync(path.join(victimDir, 'keepme.log'))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      fs.rmSync(victimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('warns instead of reporting no logs when a cleanup directory cannot be read', async () => {
+    const archiveDir = getLogArchiveDir();
+    fs.mkdirSync(archiveDir, { recursive: true });
+
+    const originalReaddirSync = fs.readdirSync;
+    const readdirSpy = spyOn(fs, 'readdirSync').mockImplementation((dirPath, options) => {
+      if (String(dirPath) === archiveDir) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+
+      return originalReaddirSync(dirPath, options as never);
+    });
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await handleCleanupCommand(['--dry-run']);
+
+      const output = logSpy.mock.calls
+        .flatMap((call) => call.map((value) => String(value)))
+        .join('\n');
+
+      expect(output).toContain('Could not read CCS Log Archives');
+      expect(output).toContain('permission denied');
+      expect(output).not.toContain('No CCS or CLIProxy logs found.');
+    } finally {
+      readdirSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it('warns instead of reporting no error logs when CLIProxy logs cannot be read', async () => {
+    const cliproxyLogsDir = path.join(getCliproxyDir(), 'logs');
+    fs.mkdirSync(cliproxyLogsDir, { recursive: true });
+
+    const originalReaddirSync = fs.readdirSync;
+    const readdirSpy = spyOn(fs, 'readdirSync').mockImplementation((dirPath, options) => {
+      if (String(dirPath) === cliproxyLogsDir) {
+        throw Object.assign(new Error('disk I/O failed'), { code: 'EIO' });
+      }
+
+      return originalReaddirSync(dirPath, options as never);
+    });
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await handleCleanupCommand(['--errors']);
+
+      const output = logSpy.mock.calls
+        .flatMap((call) => call.map((value) => String(value)))
+        .join('\n');
+
+      expect(output).toContain('Could not read CLIProxy logs');
+      expect(output).toContain('disk I/O failed');
+      expect(output).not.toContain('No error logs found.');
+    } finally {
+      readdirSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it('warns instead of treating CLIProxy log inspection errors as missing directories', async () => {
+    const cliproxyLogsDir = path.join(getCliproxyDir(), 'logs');
+    fs.mkdirSync(cliproxyLogsDir, { recursive: true });
+
+    const originalLstatSync = fs.lstatSync;
+    const lstatSpy = spyOn(fs, 'lstatSync').mockImplementation((targetPath, options) => {
+      if (String(targetPath) === cliproxyLogsDir) {
+        throw Object.assign(new Error('stat failed'), { code: 'EIO' });
+      }
+
+      return originalLstatSync(targetPath, options as never);
+    });
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await handleCleanupCommand(['--errors']);
+
+      const output = logSpy.mock.calls
+        .flatMap((call) => call.map((value) => String(value)))
+        .join('\n');
+
+      expect(output).toContain('Could not inspect CLIProxy logs');
+      expect(output).toContain('stat failed');
+      expect(output).not.toContain('No CLIProxy logs directory found.');
+    } finally {
+      lstatSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
 });

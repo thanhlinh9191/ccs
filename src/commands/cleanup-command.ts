@@ -36,55 +36,75 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
 }
 
-/** Calculate total size of regular top-level files in a directory */
-function getDirSize(dirPath: string): number {
-  if (!fs.existsSync(dirPath)) return 0;
+interface DirectorySummary {
+  fileCount: number;
+  size: number;
+}
 
-  let totalSize = 0;
-  const entries = fs.readdirSync(dirPath);
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function pathExistsForCleanup(dirPath: string): boolean {
+  try {
+    fs.lstatSync(dirPath);
+    return true;
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  }
+}
+
+/** Return entries for a real directory, rejecting symlinked directory targets. */
+function readRealDirectory(dirPath: string): string[] {
+  let stats: fs.Stats;
+
+  try {
+    stats = fs.lstatSync(dirPath);
+  } catch (error) {
+    if (isMissingPathError(error)) return [];
+    throw error;
+  }
+
+  if (!stats.isDirectory() || stats.isSymbolicLink()) return [];
+  return fs.readdirSync(dirPath);
+}
+
+/** Summarize regular top-level files in a real directory */
+function summarizeDirectory(dirPath: string): DirectorySummary {
+  const summary = { fileCount: 0, size: 0 };
+  const entries = readRealDirectory(dirPath);
 
   for (const entry of entries) {
     const filePath = path.join(dirPath, entry);
     try {
       const stats = fs.lstatSync(filePath);
       if (stats.isFile() && !stats.isSymbolicLink()) {
-        totalSize += stats.size;
+        summary.fileCount++;
+        summary.size += stats.size;
       }
     } catch {
       // File may have been deleted between readdir and stat - skip
     }
   }
 
-  return totalSize;
+  return summary;
 }
 
-/** Count files in a directory */
-function countFiles(dirPath: string): number {
-  if (!fs.existsSync(dirPath)) return 0;
-  let count = 0;
-  const entries = fs.readdirSync(dirPath);
-
-  for (const entry of entries) {
-    const filePath = path.join(dirPath, entry);
-    try {
-      const stats = fs.lstatSync(filePath);
-      if (stats.isFile() && !stats.isSymbolicLink()) {
-        count++;
-      }
-    } catch {
-      // File may have been deleted - skip
-    }
-  }
-  return count;
-}
-
-/** Delete all regular files in a directory (skips symlinks for safety) */
+/** Delete all regular files in a real directory (skips symlinks for safety) */
 function cleanDirectory(dirPath: string): { deleted: number; freedBytes: number } {
-  if (!fs.existsSync(dirPath)) return { deleted: 0, freedBytes: 0 };
-
   let deleted = 0;
   let freedBytes = 0;
-  const files = fs.readdirSync(dirPath);
+  const files = readRealDirectory(dirPath);
 
   for (const file of files) {
     const filePath = path.join(dirPath, file);
@@ -116,11 +136,9 @@ interface ErrorLogInfo {
 
 /** Get error log files with metadata */
 function getErrorLogFiles(logsDir: string): ErrorLogInfo[] {
-  if (!fs.existsSync(logsDir)) return [];
-
   const now = Date.now();
   const files: ErrorLogInfo[] = [];
-  const entries = fs.readdirSync(logsDir);
+  const entries = readRealDirectory(logsDir);
 
   for (const entry of entries) {
     // Only process error-*.log files
@@ -150,10 +168,9 @@ function getErrorLogFiles(logsDir: string): ErrorLogInfo[] {
 
 /** Delete error logs older than specified days */
 function cleanErrorLogs(
-  logsDir: string,
+  files: ErrorLogInfo[],
   maxAgeDays: number
 ): { deleted: number; freedBytes: number; kept: number } {
-  const files = getErrorLogFiles(logsDir);
   let deleted = 0;
   let freedBytes = 0;
   let kept = 0;
@@ -251,14 +268,23 @@ async function handleErrorLogCleanup(
   dryRun: boolean,
   force: boolean
 ): Promise<void> {
-  // Check if logs directory exists
-  if (!fs.existsSync(logsDir)) {
-    console.log(info('No CLIProxy logs directory found.'));
+  try {
+    if (!pathExistsForCleanup(logsDir)) {
+      console.log(info('No CLIProxy logs directory found.'));
+      return;
+    }
+  } catch (error) {
+    console.log(warn(`Could not inspect CLIProxy logs: ${getErrorMessage(error)}`));
     return;
   }
 
-  // Get error log files
-  const errorLogs = getErrorLogFiles(logsDir);
+  let errorLogs: ErrorLogInfo[];
+  try {
+    errorLogs = getErrorLogFiles(logsDir);
+  } catch (error) {
+    console.log(warn(`Could not read CLIProxy logs: ${getErrorMessage(error)}`));
+    return;
+  }
   if (errorLogs.length === 0) {
     console.log(info('No error logs found.'));
     return;
@@ -323,7 +349,14 @@ async function handleErrorLogCleanup(
   }
 
   // Perform cleanup
-  const { deleted, freedBytes, kept } = cleanErrorLogs(logsDir, maxAgeDays);
+  let result: { deleted: number; freedBytes: number; kept: number };
+  try {
+    result = cleanErrorLogs(errorLogs, maxAgeDays);
+  } catch (error) {
+    console.log(warn(`Could not clean CLIProxy logs: ${getErrorMessage(error)}`));
+    return;
+  }
+  const { deleted, freedBytes, kept } = result;
   console.log(ok(`Deleted ${deleted} error logs, freed ${formatBytes(freedBytes)}`));
   if (kept > 0) {
     console.log(info(`Kept ${kept} recent error logs (less than ${maxAgeDays} days old)`));
@@ -340,15 +373,30 @@ async function handleMainLogCleanup(options: {
   dryRun: boolean;
   force: boolean;
 }): Promise<void> {
-  const targets = [
+  const targets: Array<{ label: string; dir: string } & DirectorySummary> = [];
+  const unreadableTargets: Array<{ label: string; dir: string; error: unknown }> = [];
+  for (const target of [
     { label: 'CCS Logs', dir: options.ccsLogsDir },
     { label: 'CCS Log Archives', dir: options.ccsArchiveDir },
     { label: 'CLIProxy Logs', dir: options.cliproxyLogsDir },
-  ].map((target) => ({
-    ...target,
-    fileCount: countFiles(target.dir),
-    size: getDirSize(target.dir),
-  }));
+  ]) {
+    try {
+      targets.push({
+        ...target,
+        ...summarizeDirectory(target.dir),
+      });
+    } catch (error) {
+      unreadableTargets.push({ ...target, error });
+    }
+  }
+
+  if (unreadableTargets.length > 0) {
+    for (const target of unreadableTargets) {
+      console.log(warn(`Could not read ${target.label}: ${getErrorMessage(target.error)}`));
+      console.log(`     ${target.dir}`);
+    }
+    return;
+  }
   const activeTargets = targets.filter((target) => target.fileCount > 0);
 
   if (activeTargets.length === 0) {
@@ -396,9 +444,13 @@ async function handleMainLogCleanup(options: {
   let deleted = 0;
   let freedBytes = 0;
   for (const target of activeTargets) {
-    const result = cleanDirectory(target.dir);
-    deleted += result.deleted;
-    freedBytes += result.freedBytes;
+    try {
+      const result = cleanDirectory(target.dir);
+      deleted += result.deleted;
+      freedBytes += result.freedBytes;
+    } catch (error) {
+      console.log(warn(`Could not clean ${target.label}: ${getErrorMessage(error)}`));
+    }
   }
   console.log(ok(`Deleted ${deleted} files, freed ${formatBytes(freedBytes)}`));
 
