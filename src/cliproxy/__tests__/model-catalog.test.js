@@ -155,6 +155,19 @@ describe('Model Catalog', () => {
       assert.strictEqual(opus47.extendedContext, true);
     });
 
+    it('includes Claude Opus 4.8 with adaptive levels and extended context', () => {
+      const { MODEL_CATALOG } = modelCatalog;
+      const opus48 = MODEL_CATALOG.claude.models.find((m) => m.id === 'claude-opus-4-8');
+      assert(opus48, 'Should include Claude Opus 4.8');
+      assert.strictEqual(opus48.name, 'Claude Opus 4.8');
+      // Mirrors 4.7: Anthropic only accepts adaptive thinking levels on the
+      // current Opus generation; budget_tokens is rejected with 400.
+      assert.strictEqual(opus48.thinking.type, 'levels');
+      assert.deepStrictEqual(opus48.thinking.levels, ['low', 'medium', 'high', 'xhigh', 'max']);
+      assert.strictEqual(opus48.thinking.maxLevel, 'max');
+      assert.strictEqual(opus48.extendedContext, true);
+    });
+
     it('retains previous 4.5 snapshot models for explicit selection', () => {
       const { MODEL_CATALOG } = modelCatalog;
       const ids = MODEL_CATALOG.claude.models.map((m) => m.id);

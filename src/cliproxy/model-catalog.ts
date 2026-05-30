@@ -308,9 +308,24 @@ export const MODEL_CATALOG: Partial<Record<CLIProxyProvider, ProviderCatalog>> =
     defaultModel: 'claude-sonnet-4-6',
     models: [
       {
+        id: 'claude-opus-4-8',
+        name: 'Claude Opus 4.8',
+        description: 'Latest flagship model',
+        nativeImageInput: true,
+        // Mirrors 4.7: Anthropic accepts only adaptive thinking levels on the
+        // current Opus generation; manual budget_tokens is rejected with 400.
+        thinking: {
+          type: 'levels',
+          levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          maxLevel: 'max',
+          dynamicAllowed: true,
+        },
+        extendedContext: true,
+      },
+      {
         id: 'claude-opus-4-7',
         name: 'Claude Opus 4.7',
-        description: 'Latest flagship model',
+        description: 'Previous flagship model',
         nativeImageInput: true,
         // Opus 4.7 only supports adaptive thinking on the Anthropic API; manual
         // thinking.type: "enabled" with budget_tokens is rejected with 400.
@@ -327,7 +342,7 @@ export const MODEL_CATALOG: Partial<Record<CLIProxyProvider, ProviderCatalog>> =
       {
         id: 'claude-opus-4-6',
         name: 'Claude Opus 4.6',
-        description: 'Previous flagship model',
+        description: 'Older flagship model',
         nativeImageInput: true,
         thinking: {
           type: 'budget',

@@ -168,6 +168,14 @@ describe('model-pricing', () => {
       expect(opus47dated.outputPerMillion).toBe(25.0);
     });
 
+    it('should return correct pricing for Claude Opus 4.8', () => {
+      const opus48 = getModelPricing('claude-opus-4-8');
+      expect(opus48.inputPerMillion).toBe(5.0);
+      expect(opus48.outputPerMillion).toBe(25.0);
+      expect(opus48.cacheCreationPerMillion).toBe(6.25);
+      expect(opus48.cacheReadPerMillion).toBe(0.5);
+    });
+
     it('should not map unknown future model families onto known family pricing', () => {
       const fallback = getModelPricing('unknown-model-xyz');
 
@@ -264,6 +272,17 @@ describe('model-pricing', () => {
         cacheReadTokens: 1_000_000,
       };
       const cost = calculateCost(usage, 'claude-opus-4-7');
+      expect(cost).toBe(36.75); // 5 + 25 + 6.25 + 0.5
+    });
+
+    it('should calculate Claude Opus 4.8 cost including cache token rates', () => {
+      const usage: TokenUsage = {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        cacheCreationTokens: 1_000_000,
+        cacheReadTokens: 1_000_000,
+      };
+      const cost = calculateCost(usage, 'claude-opus-4-8');
       expect(cost).toBe(36.75); // 5 + 25 + 6.25 + 0.5
     });
   });
@@ -469,17 +488,15 @@ describe('model-pricing', () => {
     });
 
     it('gracefully ignores malformed cached model entries', () => {
-      setCachedModelsDevRegistry(
-        {
-          openai: {
-            id: 'openai',
-            models: {
-              'null-entry': null,
-              'gpt-5.5': { id: 'gpt-5.5', cost: { input: 5, output: 30 } },
-            },
+      setCachedModelsDevRegistry({
+        openai: {
+          id: 'openai',
+          models: {
+            'null-entry': null,
+            'gpt-5.5': { id: 'gpt-5.5', cost: { input: 5, output: 30 } },
           },
-        } as unknown as Parameters<typeof setCachedModelsDevRegistry>[0]
-      );
+        },
+      } as unknown as Parameters<typeof setCachedModelsDevRegistry>[0]);
 
       expect(() => getModelPricing('openai/gpt-5.5')).not.toThrow();
       expect(getModelPricing('openai/gpt-5.5').inputPerMillion).toBe(5);
