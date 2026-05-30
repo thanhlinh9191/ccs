@@ -6,6 +6,7 @@ import * as path from 'path';
 import getPort from 'get-port';
 import {
   getOpenAICompatProxyStatus,
+  isOpenAICompatProxyRunning,
   listOpenAICompatProxyStatuses,
   startOpenAICompatProxy,
   stopOpenAICompatProxy,
@@ -918,6 +919,62 @@ describe('openai proxy daemon lifecycle', () => {
     expect(secondStart.alreadyRunning).not.toBe(true);
     expect(secondStart.authToken).not.toBe('stale-token-a');
   });
+
+  it('stops pid-only profile daemons instead of only deleting their state', async () => {
+    const port = await getPort();
+    const settingsPath = path.join(tempDir, 'pid-only-stop.settings.json');
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        env: {
+          ANTHROPIC_BASE_URL: 'https://api.openai.com/v1',
+          ANTHROPIC_AUTH_TOKEN: 'sk-pid-only-stop',
+          ANTHROPIC_MODEL: 'gpt-4.1',
+        },
+      }),
+      'utf8'
+    );
+
+    const profile = resolveOpenAICompatProfileConfig('pid-only-stop', settingsPath, {
+      ANTHROPIC_BASE_URL: 'https://api.openai.com/v1',
+      ANTHROPIC_AUTH_TOKEN: 'sk-pid-only-stop',
+      ANTHROPIC_MODEL: 'gpt-4.1',
+    });
+    if (!profile) {
+      throw new Error('Expected pid-only-stop OpenAI-compatible profile');
+    }
+
+    const started = await startOpenAICompatProxy(profile, { port });
+    expect(started.success).toBe(true);
+    expect(started.pid).toBeDefined();
+
+    const pid = started.pid;
+    if (!pid) {
+      throw new Error('Expected pid-only-stop daemon pid');
+    }
+
+    try {
+      fs.unlinkSync(getOpenAICompatProxySessionPath('pid-only-stop'));
+
+      const statuses = await listOpenAICompatProxyStatuses();
+      expect(statuses).toContainEqual({
+        running: false,
+        profileName: 'pid-only-stop',
+        pid,
+      });
+
+      const stopped = await stopOpenAICompatProxy();
+      expect(stopped.success).toBe(true);
+      expect(fs.existsSync(getOpenAICompatProxyPidPath('pid-only-stop'))).toBe(false);
+      expect(await isOpenAICompatProxyRunning(port, 'pid-only-stop')).toBe(false);
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already stopped.
+      }
+    }
+  }, 35000);
 
   it('replaces pid-only proxy state before starting a new daemon', async () => {
     const firstPort = await getPort();

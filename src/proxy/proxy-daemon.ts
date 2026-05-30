@@ -285,7 +285,7 @@ function getOpenAICompatProxyStateForProfile(profileName: string): OpenAICompatP
     };
   }
 
-  return { pid: null, session: null, source: 'profile' };
+  return { pid: getOpenAICompatProxyPid(profileName), session: null, source: 'profile' };
 }
 
 export async function listOpenAICompatProxyStatuses(): Promise<OpenAICompatProxyStatus[]> {
