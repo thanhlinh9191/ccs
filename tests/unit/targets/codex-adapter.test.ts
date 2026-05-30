@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { CodexAdapter } from '../../../src/targets/codex-adapter';
+import { CCSXP_CLIPROXY_SHORTCUT_ENV } from '../../../src/targets/codex-cliproxy-provider-config';
 import {
   buildCodexBrowserMcpOverrides,
   getCodexBrowserMcpServerName,
@@ -97,6 +98,30 @@ describe('CodexAdapter', () => {
     ).toThrow(/does not advertise --config overrides/);
   });
 
+  test('rejects ccsxp default launches when codex lacks config override support', () => {
+    const originalShortcut = process.env[CCSXP_CLIPROXY_SHORTCUT_ENV];
+    process.env[CCSXP_CLIPROXY_SHORTCUT_ENV] = '1';
+    try {
+      expect(() =>
+        adapter.buildArgs('default', ['--config', 'model_provider="cliproxy"', '--version'], {
+          profileType: 'default',
+          binaryInfo: {
+            path: '/tmp/codex',
+            needsShell: false,
+            version: 'codex-cli 0.1.0',
+            features: [],
+          },
+        })
+      ).toThrow(/does not advertise --config overrides/);
+    } finally {
+      if (originalShortcut === undefined) {
+        delete process.env[CCSXP_CLIPROXY_SHORTCUT_ENV];
+      } else {
+        process.env[CCSXP_CLIPROXY_SHORTCUT_ENV] = originalShortcut;
+      }
+    }
+  });
+
   test('injects transient config overrides for CCS-backed launches', () => {
     const runtimeConfigOverrides = buildCodexBrowserMcpOverrides();
     const args = adapter.buildArgs('codex', ['--search'], {
@@ -120,7 +145,9 @@ describe('CodexAdapter', () => {
     expect(args).toContain('model_provider="ccs_runtime"');
     expect(args).toContain('model_providers.ccs_runtime.env_key="CCS_CODEX_API_KEY"');
     expect(args).toContain('model="gpt-5.4"');
-    expect(args).toContain(`mcp_servers.${getCodexBrowserMcpServerName()}.command=${JSON.stringify(process.platform === 'win32' ? 'npx.cmd' : 'npx')}`);
+    expect(args).toContain(
+      `mcp_servers.${getCodexBrowserMcpServerName()}.command=${JSON.stringify(process.platform === 'win32' ? 'npx.cmd' : 'npx')}`
+    );
     expect(args).toContain('model_reasoning_effort="high"');
     expect(args[args.length - 1]).toBe('--search');
   });

@@ -716,8 +716,10 @@ process.exit(0);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('codex-cli 9.9.9-test');
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', '--version'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      '--version',
     ]);
   });
 
@@ -739,19 +741,17 @@ process.exit(0);
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: path.join(tmpHome, '.codex'),
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CLIPROXY_API_KEY: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
-    ]);
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: path.join(tmpHome, '.codex'),
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLIPROXY_API_KEY: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
   });
 
   it('routes default ccsxp launches through native Codex with the cliproxy provider override', () => {
@@ -770,24 +770,50 @@ process.exit(0);
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', 'fix failing tests'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      'fix failing tests',
     ]);
     const codexConfig = fs.readFileSync(path.join(tmpHome, '.codex', 'config.toml'), 'utf8');
     expect(codexConfig).toContain('[model_providers.cliproxy]');
     expect(codexConfig).toContain('env_key = "CLIPROXY_API_KEY"');
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: path.join(tmpHome, '.codex'),
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CLIPROXY_API_KEY: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: path.join(tmpHome, '.codex'),
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLIPROXY_API_KEY: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
+  });
+
+  it('fails fast when ccsxp needs unsupported Codex config overrides', () => {
+    if (process.platform === 'win32') return;
+
+    const result = runCcsxpAlias(['--version'], {
+      ...process.env,
+      CI: '1',
+      NO_COLOR: '1',
+      HOME: tmpHome,
+      CCS_HOME: tmpHome,
+      CCS_CODEX_PATH: fakeCodexPath,
+      CCS_TEST_CODEX_ARGS_OUT: codexArgsLogPath,
+      CCS_TEST_CODEX_CONFIG_OVERRIDE_STATUS: 'unsupported',
+      CCS_TEST_CODEX_VERSION: 'codex-cli 9.9.9-test',
+      CCS_TEST_CODEX_HELP: '  -p, --profile <CONFIG_PROFILE>\n',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Codex CLI (codex-cli 9.9.9-test)');
+    expect(result.stderr).toContain('does not advertise --config overrides');
+    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
+      ['-c', 'model="gpt-5"', '--version'],
+      ['--help'],
+      ['--version'],
     ]);
   });
 
@@ -810,8 +836,10 @@ process.exit(0);
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', 'fix failing tests'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      'fix failing tests',
     ]);
     const codexConfig = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
     expect(codexConfig).toContain('model = "gpt-5.5"');
@@ -931,24 +959,24 @@ supports_websockets = false
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', 'fix failing tests'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      'fix failing tests',
     ]);
     const codexConfig = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
     expect(codexConfig).toContain('env_key = "CCS_CUSTOM_CLIPROXY_TOKEN"');
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: codexHome,
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CCS_CUSTOM_CLIPROXY_TOKEN: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
-    ]);
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: codexHome,
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CCS_CUSTOM_CLIPROXY_TOKEN: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
   });
 
   it('preserves a custom cliproxy provider base_url for ccsxp launches', () => {
@@ -982,27 +1010,27 @@ supports_websockets = false
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', 'fix failing tests'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      'fix failing tests',
     ]);
     const codexConfig = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
     expect(codexConfig).toContain(
       'base_url = "https://cliproxy.example.com/api/provider/codex/responses"'
     );
     expect(codexConfig).toContain('env_key = "CCS_REMOTE_CLIPROXY_TOKEN"');
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: codexHome,
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CCS_REMOTE_CLIPROXY_TOKEN: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
-    ]);
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: codexHome,
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CCS_REMOTE_CLIPROXY_TOKEN: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
   });
 
   it('keeps ccsxp native when the CCS default profile is a Claude account', () => {
@@ -1033,22 +1061,22 @@ supports_websockets = false
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexCalls(codexArgsLogPath)).toEqual([
-      ['--config', 'model_provider="cliproxy"', 'fix failing tests'],
+    expect(readLoggedCodexCalls(codexArgsLogPath).at(-1)).toEqual([
+      '--config',
+      'model_provider="cliproxy"',
+      'fix failing tests',
     ]);
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: path.join(tmpHome, '.codex'),
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CLIPROXY_API_KEY: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
-    ]);
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: path.join(tmpHome, '.codex'),
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLIPROXY_API_KEY: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
   });
 
   it('keeps implicit ccs --target codex launches native when the CCS default is a Claude account', () => {
@@ -1073,6 +1101,7 @@ supports_websockets = false
       HOME: tmpHome,
       CCS_HOME: tmpHome,
       CCS_CODEX_PATH: fakeCodexPath,
+      CODEX_HOME: undefined,
       CCS_TEST_CODEX_ARGS_OUT: codexArgsLogPath,
       CCS_TEST_CODEX_ENV_OUT: codexEnvLogPath,
       CCS_THINKING: '8192',
@@ -1235,19 +1264,17 @@ supports_websockets = false
     });
 
     expect(result.status).toBe(0);
-    expect(readLoggedCodexEnv(codexEnvLogPath)).toEqual([
-      {
-        CODEX_HOME: explicitCodexHome,
-        CODEX_CI: undefined,
-        CODEX_MANAGED_BY_BUN: undefined,
-        CODEX_THREAD_ID: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CLIPROXY_API_KEY: 'ccs-internal-managed',
-        CCS_BROWSER_USER_DATA_DIR: undefined,
-        CCS_BROWSER_PROFILE_DIR: undefined,
-        CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
-      },
-    ]);
+    expect(readLoggedCodexEnv(codexEnvLogPath).at(-1)).toEqual({
+      CODEX_HOME: explicitCodexHome,
+      CODEX_CI: undefined,
+      CODEX_MANAGED_BY_BUN: undefined,
+      CODEX_THREAD_ID: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLIPROXY_API_KEY: 'ccs-internal-managed',
+      CCS_BROWSER_USER_DATA_DIR: undefined,
+      CCS_BROWSER_PROFILE_DIR: undefined,
+      CCS_BROWSER_DEVTOOLS_WS_URL: undefined,
+    });
   });
 
   it('fails with a clean CLI error when ccsxp receives a malformed --target flag', () => {

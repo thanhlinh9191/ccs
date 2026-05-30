@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as os from 'os';
 import * as path from 'path';
+import { CCSXP_CLIPROXY_SHORTCUT_ENV } from '../../../src/targets/codex-cliproxy-provider-config';
 
 const wrapperPath = require.resolve('../../../src/bin/ccsxp-runtime.ts');
 const ccsPath = require.resolve('../../../src/ccs.ts');
 
 describe('ccsxp runtime wrapper', () => {
   const originalArgv = process.argv;
-    const originalEntryTarget = process.env.CCS_INTERNAL_ENTRY_TARGET;
-    const originalCodexHome = process.env.CODEX_HOME;
-    const originalCcsCodexProfile = process.env.CCS_CODEX_PROFILE;
-    const originalCcsxpCodexHome = process.env.CCSXP_CODEX_HOME;
+  const originalEntryTarget = process.env.CCS_INTERNAL_ENTRY_TARGET;
+  const originalShortcut = process.env[CCSXP_CLIPROXY_SHORTCUT_ENV];
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCcsCodexProfile = process.env.CCS_CODEX_PROFILE;
+  const originalCcsxpCodexHome = process.env.CCSXP_CODEX_HOME;
 
   beforeEach(() => {
     delete require.cache[wrapperPath];
@@ -24,6 +26,11 @@ describe('ccsxp runtime wrapper', () => {
       delete process.env.CCS_INTERNAL_ENTRY_TARGET;
     } else {
       process.env.CCS_INTERNAL_ENTRY_TARGET = originalEntryTarget;
+    }
+    if (originalShortcut === undefined) {
+      delete process.env[CCSXP_CLIPROXY_SHORTCUT_ENV];
+    } else {
+      process.env[CCSXP_CLIPROXY_SHORTCUT_ENV] = originalShortcut;
     }
     if (originalCodexHome === undefined) {
       delete process.env.CODEX_HOME;
