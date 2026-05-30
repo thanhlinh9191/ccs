@@ -24,20 +24,23 @@ import type { ResolvedProxyConfig } from '../types';
 import type { UnifiedConfig } from '../../config/schemas/unified-config';
 import { isNetworkError, handleNetworkError } from './retry-handler';
 
-/** Result returned from resolveExecutorProxy */
-export interface ResolvedProxy {
+export interface ResolvedExecutorProxyConfig {
   /** Resolved proxy config after merging CLI > ENV > config.yaml > defaults */
   proxyConfig: ResolvedProxyConfig;
+  /** Args after proxy-related flags are stripped out */
+  argsWithoutProxy: string[];
+  /** Mutated executor config (port resolved and validated) */
+  cfg: ExecutorConfig;
+}
+
+/** Result returned from resolveExecutorProxy */
+export interface ResolvedProxy extends ResolvedExecutorProxyConfig {
   /** Whether to use the remote proxy (vs spawning a local one) */
   useRemoteProxy: boolean;
   /** Which local backend binary to use ('original' | 'plus') */
   localBackend: CLIProxyBackend;
   /** Absolute path to CLIProxy binary; undefined when useRemoteProxy=true */
   binaryPath: string | undefined;
-  /** Args after proxy-related flags are stripped out */
-  argsWithoutProxy: string[];
-  /** Mutated executor config (port resolved and validated) */
-  cfg: ExecutorConfig;
 }
 
 /** Dependencies injected by the orchestrator */
@@ -50,16 +53,15 @@ export interface ResolveExecutorProxyContext {
 }
 
 /**
- * Resolves proxy configuration, checks remote reachability, selects the local
- * backend, and ensures the CLIProxy binary is present when running locally.
+ * Resolves side-effect-free proxy configuration and strips proxy flags.
  *
  * Mutates `context.cfg.port` in-place (same as original orchestrator behaviour).
  */
-export async function resolveExecutorProxy(
+export function resolveExecutorProxyConfig(
   args: string[],
   context: ResolveExecutorProxyContext
-): Promise<ResolvedProxy> {
-  const { unifiedConfig, allProviders, verbose: _verbose, cfg, log } = context;
+): ResolvedExecutorProxyConfig {
+  const { unifiedConfig, cfg, log } = context;
 
   // Resolve proxy config from CLI flags > ENV > config.yaml > defaults
   const cliproxyServerConfig = unifiedConfig.cliproxy_server;
@@ -97,6 +99,20 @@ export async function resolveExecutorProxy(
   if (proxyConfig.mode === 'remote') {
     log(`Remote host: ${proxyConfig.host}:${proxyConfig.port} (${proxyConfig.protocol})`);
   }
+
+  return { proxyConfig, argsWithoutProxy, cfg };
+}
+
+/**
+ * Resolves proxy configuration, checks remote reachability, selects the local
+ * backend, and ensures the CLIProxy binary is present when running locally.
+ */
+export async function resolveExecutorProxy(
+  resolvedConfig: ResolvedExecutorProxyConfig,
+  context: ResolveExecutorProxyContext
+): Promise<ResolvedProxy> {
+  const { allProviders, verbose: _verbose } = context;
+  const { proxyConfig, argsWithoutProxy, cfg } = resolvedConfig;
 
   // Check remote proxy reachability
   let useRemoteProxy = false;

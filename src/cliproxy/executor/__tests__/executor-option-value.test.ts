@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as http from 'http';
 import { execClaudeWithCLIProxy, hasGitLabTokenLoginFlag, readOptionValue } from '../index';
 
 describe('readOptionValue', () => {
@@ -57,6 +58,7 @@ describe('execClaudeWithCLIProxy browser flag validation', () => {
     fs.writeFileSync(fakeClaudePath, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.chmodSync(fakeClaudePath, 0o755);
     originalCcsHome = process.env.CCS_HOME;
+    process.exitCode = 0;
     process.env.CCS_HOME = tmpHome;
   });
 
@@ -66,7 +68,63 @@ describe('execClaudeWithCLIProxy browser flag validation', () => {
     } else {
       delete process.env.CCS_HOME;
     }
+    process.exitCode = 0;
     fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('validates conflicting browser launch flags before remote proxy checks', async () => {
+    let requestCount = 0;
+    const server = http.createServer((_req, res) => {
+      requestCount += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      server.close();
+      throw new Error('Test server did not bind to a TCP port');
+    }
+
+    const exitSpy = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined as never) as typeof process.exit);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await execClaudeWithCLIProxy(
+        fakeClaudePath,
+        'gemini',
+        [
+          '--proxy-host',
+          '127.0.0.1',
+          '--proxy-port',
+          String(address.port),
+          '--proxy-auth-token',
+          'SECRET_TOKEN_FOR_VALIDATION',
+          '--remote-only',
+          '--browser',
+          '--no-browser',
+        ],
+        {}
+      );
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[X] Use either `--browser` or `--no-browser`, not both.'
+      );
+      expect(requestCount).toBe(0);
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it('exits cleanly when conflicting browser launch flags are provided', async () => {

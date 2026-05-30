@@ -9,7 +9,7 @@
  * 4. Browser MCP ensure + sync-to-config-dir
  */
 
-import { warn } from '../../utils/ui';
+import { fail, warn } from '../../utils/ui';
 import {
   type BrowserLaunchOverride,
   ensureBrowserMcpOrThrow,
@@ -49,7 +49,8 @@ export function resolveBrowserLaunchFlags(argsWithoutProxy: string[]): {
     browserLaunchOverride = browserLaunchFlags.override;
     argsWithoutBrowserFlags = browserLaunchFlags.argsWithoutFlags;
   } catch (error) {
-    console.error(warn((error as Error).message));
+    console.error(fail((error as Error).message));
+    process.exitCode = 1;
     process.exit(1);
     return { browserLaunchOverride: undefined, argsWithoutBrowserFlags };
   }
