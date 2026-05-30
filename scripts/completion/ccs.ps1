@@ -6,16 +6,6 @@ function Invoke-CcsCompletionBackend {
         [string[]]$TokensBeforeCurrent
     )
 
-    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-    $repoCli = Join-Path $repoRoot 'dist\ccs.js'
-    if (-not (Test-Path $repoCli)) {
-        $repoCli = Join-Path $repoRoot 'bin\ccs.js'
-    }
-    if (Test-Path $repoCli) {
-        & node $repoCli __complete --shell powershell --current $CurrentWord -- @TokensBeforeCurrent 2>$null
-        return
-    }
-
     if (Get-Command ccs -ErrorAction SilentlyContinue) {
         & ccs __complete --shell powershell --current $CurrentWord -- @TokensBeforeCurrent 2>$null
     }

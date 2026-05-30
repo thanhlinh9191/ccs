@@ -22,18 +22,6 @@ __ccs_completion_run() {
   local current="$1"
   shift || true
 
-  local script_dir repo_root repo_cli
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  repo_root="$(cd "${script_dir}/../.." && pwd)"
-  repo_cli="${repo_root}/dist/ccs.js"
-  if [[ ! -f "${repo_cli}" ]]; then
-    repo_cli="${repo_root}/bin/ccs.js"
-  fi
-  if [[ -f "${repo_cli}" ]]; then
-    node "${repo_cli}" __complete --shell bash --current "${current}" -- "$@" 2>/dev/null
-    return 0
-  fi
-
   if command -v ccs >/dev/null 2>&1; then
     ccs __complete --shell bash --current "${current}" -- "$@" 2>/dev/null
   fi

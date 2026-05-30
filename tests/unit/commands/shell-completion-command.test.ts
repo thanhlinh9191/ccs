@@ -143,6 +143,27 @@ describe('shell-completion command', () => {
     );
   });
 
+  it('completion adapters only delegate to the ccs command on PATH', () => {
+    const completionScripts = [
+      '../../../scripts/completion/ccs.bash',
+      '../../../scripts/completion/ccs.zsh',
+      '../../../scripts/completion/ccs.fish',
+      '../../../scripts/completion/ccs.ps1',
+    ];
+
+    for (const scriptPath of completionScripts) {
+      const script = readFileSync(join(import.meta.dir, scriptPath), 'utf8');
+
+      expect(script).not.toContain('../..');
+      expect(script).not.toContain('repo_root');
+      expect(script).not.toContain('repoRoot');
+      expect(script).not.toContain('repo_cli');
+      expect(script).not.toContain('repoCli');
+      expect(script).not.toContain('node ');
+      expect(script).not.toContain('& node');
+    }
+  });
+
   it('fish completion strips a duplicated partial token before delegating to __complete', () => {
     const fishScript = readFileSync(
       join(import.meta.dir, '../../../scripts/completion/ccs.fish'),

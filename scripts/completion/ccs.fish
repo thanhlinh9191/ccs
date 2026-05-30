@@ -11,17 +11,6 @@ function __fish_ccs_complete
         set -e tokens_before_current[-1]
     end
 
-    set -l script_file (status filename)
-    set -l repo_root (realpath (dirname $script_file)/../.. 2>/dev/null)
-    set -l repo_cli "$repo_root/dist/ccs.js"
-    if not test -f "$repo_cli"
-        set repo_cli "$repo_root/bin/ccs.js"
-    end
-    if test -f "$repo_cli"
-        node "$repo_cli" __complete --shell fish --current "$current" -- $tokens_before_current 2>/dev/null
-        return
-    end
-
     if command -sq ccs
         ccs __complete --shell fish --current "$current" -- $tokens_before_current 2>/dev/null
     end
