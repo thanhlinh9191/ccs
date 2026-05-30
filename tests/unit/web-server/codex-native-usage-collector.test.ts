@@ -311,6 +311,28 @@ describe('codex native usage collector', () => {
     expect(entries).toHaveLength(2);
   });
 
+  it('writes native usage caches with owner-only permissions', async () => {
+    if (process.platform === 'win32') return;
+
+    writeCodexRollout(tempRoot);
+    const cacheDir = getCacheDir();
+    const previousUmask = process.umask(0o022);
+
+    try {
+      await scanCodexNativeUsageEntries({
+        env: { CODEX_HOME: tempRoot },
+        homeDir: tempRoot,
+        cacheDir,
+      });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    const cachePath = path.join(cacheDir, 'codex-native-usage-v1.json');
+    expect(fs.statSync(cacheDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(cachePath).mode & 0o777).toBe(0o600);
+  });
+
   it('keeps default and include-cliproxy cache entries separate', async () => {
     writeCodexRollout(tempRoot, { modelProvider: 'cliproxy' });
     const cacheDir = getCacheDir();

@@ -14,6 +14,8 @@ interface CodexNativeUsageCollectorOptions {
 }
 
 const CODEX_NATIVE_USAGE_CACHE_VERSION = 1;
+const SECURE_CACHE_DIR_MODE = 0o700;
+const SECURE_CACHE_FILE_MODE = 0o600;
 
 interface CachedRolloutFile {
   path: string;
@@ -133,6 +135,14 @@ function isCodexNativeUsageCache(value: unknown): value is CodexNativeUsageCache
   return Object.values(value.files).every(isCachedRolloutFile);
 }
 
+function chmodBestEffort(targetPath: string, mode: number): void {
+  try {
+    fs.chmodSync(targetPath, mode);
+  } catch {
+    // Cache reads and writes remain best-effort on filesystems that do not support chmod.
+  }
+}
+
 function readUsageCache(
   cacheDir: string,
   includeCliproxySessions: boolean
@@ -153,11 +163,17 @@ function readUsageCache(
 
 function writeUsageCache(cacheDir: string, cache: CodexNativeUsageCache): void {
   try {
-    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.mkdirSync(cacheDir, { recursive: true, mode: SECURE_CACHE_DIR_MODE });
+    chmodBestEffort(cacheDir, SECURE_CACHE_DIR_MODE);
     const cachePath = getCacheFilePath(cacheDir, cache.includeCliproxySessions);
     const tempPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(cache), 'utf8');
+    fs.writeFileSync(tempPath, JSON.stringify(cache), {
+      encoding: 'utf8',
+      mode: SECURE_CACHE_FILE_MODE,
+    });
+    chmodBestEffort(tempPath, SECURE_CACHE_FILE_MODE);
     fs.renameSync(tempPath, cachePath);
+    chmodBestEffort(cachePath, SECURE_CACHE_FILE_MODE);
   } catch {
     // Best-effort only.
   }
