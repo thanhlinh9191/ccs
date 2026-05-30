@@ -378,7 +378,8 @@ export function QuotaTooltipContent({ quota, resetTime }: QuotaTooltipContentPro
   if (isGeminiQuotaResult(quota)) {
     const hasBucketResetTime = quota.buckets.some((bucket) => !!bucket.resetTime);
     const hasEntitlementTier =
-      !!quota.entitlement?.rawTierLabel || quota.entitlement?.normalizedTier !== 'unknown';
+      !!quota.entitlement?.rawTierLabel ||
+      (!!quota.entitlement && quota.entitlement.normalizedTier !== 'unknown');
     const distinctTokenTypes = Array.from(
       new Set(
         quota.buckets

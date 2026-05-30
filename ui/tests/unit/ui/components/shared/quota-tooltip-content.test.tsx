@@ -83,6 +83,20 @@ describe('QuotaTooltipContent', () => {
     expect(screen.getByText(expectedReset)).toBeInTheDocument();
   });
 
+  it('renders the Gemini tier label when entitlement evidence is absent', () => {
+    const quota = createGeminiQuotaResult({
+      entitlement: undefined,
+      tierLabel: 'Legacy Pro',
+      tierId: null,
+      creditBalance: null,
+    });
+
+    render(<QuotaTooltipContent quota={quota} resetTime={null} />);
+
+    expect(screen.getByText('Tier')).toBeInTheDocument();
+    expect(screen.getByText('Legacy Pro')).toBeInTheDocument();
+  });
+
   it('falls back to the shared reset indicator when Gemini buckets omit reset timestamps', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-29T00:00:00Z'));
