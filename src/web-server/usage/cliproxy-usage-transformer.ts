@@ -64,27 +64,109 @@ function createHistoryDetail(
   detail: CliproxyRequestDetail
 ): CliproxyUsageHistoryDetail {
   const pricingProvider = normalizeUsageProvider(provider) ?? provider.trim().toLowerCase();
+  const inputTokens = detail.tokens?.input_tokens ?? 0;
+  const outputTokens = detail.tokens?.output_tokens ?? 0;
+  const cacheReadTokens = detail.tokens?.cached_tokens ?? 0;
+
   return {
     model,
     provider: pricingProvider,
     timestamp: detail.timestamp,
     source: detail.source,
     authIndex: String(detail.auth_index),
-    inputTokens: detail.tokens?.input_tokens ?? 0,
-    outputTokens: detail.tokens?.output_tokens ?? 0,
-    cacheReadTokens: detail.tokens?.cached_tokens ?? 0,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
     requestCount: 1,
-    cost: calculateCost(
-      {
-        inputTokens: detail.tokens?.input_tokens ?? 0,
-        outputTokens: detail.tokens?.output_tokens ?? 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: detail.tokens?.cached_tokens ?? 0,
-      },
+    cost: calculateHistoryDetailCost(
       model,
-      { provider: pricingProvider }
+      pricingProvider,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens
     ),
     failed: detail.failed,
+  };
+}
+
+function calculateHistoryDetailCost(
+  model: string,
+  provider: string | undefined,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number
+): number {
+  return calculateCost(
+    {
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens,
+    },
+    model,
+    provider ? { provider } : undefined
+  );
+}
+
+function normalizePersistedNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizePersistedProvider(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+
+  return normalizeUsageProvider(trimmed) ?? trimmed.toLowerCase();
+}
+
+export function normalizeCliproxyUsageHistoryDetail(
+  detail: unknown
+): CliproxyUsageHistoryDetail | null {
+  if (!detail || typeof detail !== 'object') return null;
+
+  const candidate = detail as Record<string, unknown>;
+  if (
+    typeof candidate.model !== 'string' ||
+    typeof candidate.timestamp !== 'string' ||
+    typeof candidate.source !== 'string' ||
+    !Number.isFinite(Date.parse(candidate.timestamp))
+  ) {
+    return null;
+  }
+
+  const provider = normalizePersistedProvider(candidate.provider);
+  const inputTokens = normalizePersistedNumber(candidate.inputTokens);
+  const outputTokens = normalizePersistedNumber(candidate.outputTokens);
+  const cacheReadTokens = normalizePersistedNumber(candidate.cacheReadTokens);
+  const requestCount = Math.max(1, normalizePersistedNumber(candidate.requestCount, 1));
+  const cost = normalizePersistedNumber(
+    candidate.cost,
+    calculateHistoryDetailCost(
+      candidate.model,
+      provider,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens
+    )
+  );
+
+  return {
+    model: candidate.model,
+    ...(provider && { provider }),
+    timestamp: candidate.timestamp,
+    source: candidate.source,
+    authIndex:
+      typeof candidate.authIndex === 'string'
+        ? candidate.authIndex
+        : String(candidate.authIndex ?? ''),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    requestCount,
+    cost,
+    failed: candidate.failed === true,
   };
 }
 
@@ -143,12 +225,53 @@ function createHistorySignature(detail: CliproxyUsageHistoryDetail): string {
   ].join('|');
 }
 
+function createProviderlessHistorySignature(detail: CliproxyUsageHistoryDetail): string {
+  return [
+    detail.model,
+    detail.timestamp,
+    detail.source,
+    detail.authIndex,
+    detail.inputTokens,
+    detail.outputTokens,
+    detail.cacheReadTokens,
+    detail.requestCount,
+    detail.failed ? '1' : '0',
+  ].join('|');
+}
+
+function hydrateProviderlessHistoryDetails(
+  existing: CliproxyUsageHistoryDetail[],
+  incoming: CliproxyUsageHistoryDetail[]
+): CliproxyUsageHistoryDetail[] {
+  const incomingByProviderlessSignature = new Map<string, CliproxyUsageHistoryDetail[]>();
+  for (const detail of incoming) {
+    if (!detail.provider) continue;
+
+    const signature = createProviderlessHistorySignature(detail);
+    incomingByProviderlessSignature.set(signature, [
+      ...(incomingByProviderlessSignature.get(signature) ?? []),
+      detail,
+    ]);
+  }
+
+  return existing.map((detail) => {
+    if (detail.provider) return detail;
+
+    const matches = incomingByProviderlessSignature.get(createProviderlessHistorySignature(detail));
+    const providers = new Set(matches?.map((match) => match.provider).filter(Boolean));
+    if (!matches || providers.size !== 1) return detail;
+
+    return { ...detail, provider: matches[0].provider, cost: matches[0].cost };
+  });
+}
+
 export function mergeCliproxyUsageHistoryDetails(
   existing: CliproxyUsageHistoryDetail[],
   incoming: CliproxyUsageHistoryDetail[]
 ): CliproxyUsageHistoryDetail[] {
+  const hydratedExisting = hydrateProviderlessHistoryDetails(existing, incoming);
   const existingCounts = new Map<string, { detail: CliproxyUsageHistoryDetail; count: number }>();
-  for (const detail of existing) {
+  for (const detail of hydratedExisting) {
     const signature = createHistorySignature(detail);
     const entry = existingCounts.get(signature);
     if (entry) {

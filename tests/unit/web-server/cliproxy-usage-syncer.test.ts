@@ -20,7 +20,10 @@ function fetchRawResponse(): Promise<CliproxyUsageApiResponse | null> {
   return Promise.resolve(rawResponse);
 }
 
-function buildResponse(inputTokens: number, timestamp = '2026-03-02T12:00:00.000Z'): CliproxyUsageApiResponse {
+function buildResponse(
+  inputTokens: number,
+  timestamp = '2026-03-02T12:00:00.000Z'
+): CliproxyUsageApiResponse {
   return {
     usage: {
       apis: {
@@ -175,6 +178,69 @@ describe('cliproxy usage syncer', () => {
     });
   });
 
+  it('normalizes old v3 snapshot details before loading and merging history', async () => {
+    await runWithScopedConfigDir(ccsDir, async () => {
+      const snapshotPath = path.join(ccsDir, 'cache', 'cliproxy-usage', 'latest.json');
+      fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+      fs.writeFileSync(
+        snapshotPath,
+        JSON.stringify({
+          version: 3,
+          timestamp: Date.now() - 60_000,
+          details: [
+            {
+              model: 'gemini-2.5-pro',
+              timestamp: '2026-03-02T12:00:00.000Z',
+              source: 'account-a',
+              authIndex: '0',
+              inputTokens: 100,
+              outputTokens: 20,
+              cacheReadTokens: 10,
+              failed: false,
+            },
+          ],
+          daily: [
+            {
+              date: '2026-03-02',
+              source: 'cliproxy',
+              inputTokens: 100,
+              outputTokens: 20,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 10,
+              cost: null,
+              totalCost: null,
+              modelsUsed: ['gemini-2.5-pro'],
+              modelBreakdowns: [],
+            },
+          ],
+          hourly: [],
+          monthly: [],
+        }),
+        'utf-8'
+      );
+
+      const loaded = await loadCachedCliproxyData();
+      expect(loaded.daily[0].inputTokens).toBe(100);
+      expect(Number.isFinite(loaded.daily[0].totalCost)).toBe(true);
+      expect(loaded.hourly[0].requestCount).toBe(1);
+
+      await syncCliproxyUsage(fetchRawResponse);
+
+      const cached = await loadCachedCliproxyData();
+      expect(cached.daily).toHaveLength(1);
+      expect(cached.daily[0].inputTokens).toBe(100);
+      expect(cached.hourly[0].requestCount).toBe(1);
+
+      const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8')) as {
+        details: Array<{ requestCount?: number; cost?: number; provider?: string }>;
+      };
+      expect(snapshot.details).toHaveLength(1);
+      expect(snapshot.details[0].requestCount).toBe(1);
+      expect(Number.isFinite(snapshot.details[0].cost)).toBe(true);
+      expect(snapshot.details[0].provider).toBe('google');
+    });
+  });
+
   it('migrates legacy v1 and v2 snapshots forward before merging new history', async () => {
     for (const version of [1, 2]) {
       await runWithScopedConfigDir(ccsDir, async () => {
@@ -264,7 +330,9 @@ describe('cliproxy usage syncer', () => {
 
         const cached = await loadCachedCliproxyData();
         expect(cached.daily.map((entry) => entry.date)).toEqual(['2026-03-02', '2026-03-01']);
-        expect(cached.hourly.find((entry) => entry.hour === '2026-03-01 12:00')?.requestCount).toBe(7);
+        expect(cached.hourly.find((entry) => entry.hour === '2026-03-01 12:00')?.requestCount).toBe(
+          7
+        );
       });
     }
   });
@@ -274,9 +342,7 @@ describe('cliproxy usage syncer', () => {
       await syncCliproxyUsage(() =>
         Promise.resolve(buildResponse(100, '2024-01-01T12:00:00.000Z'))
       );
-      await syncCliproxyUsage(() =>
-        Promise.resolve(buildResponse(200, new Date().toISOString()))
-      );
+      await syncCliproxyUsage(() => Promise.resolve(buildResponse(200, new Date().toISOString())));
 
       const cached = await loadCachedCliproxyData();
       expect(cached.daily.some((entry) => entry.date === '2024-01-01')).toBe(false);

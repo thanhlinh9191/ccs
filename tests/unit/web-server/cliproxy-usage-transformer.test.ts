@@ -11,6 +11,7 @@ import {
   buildCliproxyUsageHistoryAggregates,
   extractCliproxyUsageHistoryDetails,
   mergeCliproxyUsageHistoryDetails,
+  normalizeCliproxyUsageHistoryDetail,
   transformCliproxyToDailyUsage,
   transformCliproxyToHourlyUsage,
   transformCliproxyToMonthlyUsage,
@@ -111,18 +112,12 @@ describe('cliproxy usage transformer', () => {
     expect(flat[0].provider).toBe('google');
     expect(
       flat.some(
-        (entry) =>
-          entry.failed === true &&
-          entry.inputTokens === 40 &&
-          entry.outputTokens === 10
+        (entry) => entry.failed === true && entry.inputTokens === 40 && entry.outputTokens === 10
       )
     ).toBe(true);
     expect(
       flat.some(
-        (entry) =>
-          entry.failed === true &&
-          entry.inputTokens === 0 &&
-          entry.outputTokens === 0
+        (entry) => entry.failed === true && entry.inputTokens === 0 && entry.outputTokens === 0
       )
     ).toBe(false);
   });
@@ -132,6 +127,54 @@ describe('cliproxy usage transformer', () => {
     const merged = mergeCliproxyUsageHistoryDetails(details, details);
 
     expect(merged).toHaveLength(details.length);
+  });
+
+  it('normalizes old v3 history details before merging with provider-aware entries', () => {
+    const [incoming] = extractCliproxyUsageHistoryDetails({
+      usage: {
+        apis: {
+          gemini: {
+            models: {
+              'gemini-2.5-pro': {
+                details: [
+                  {
+                    timestamp: '2026-03-01T10:15:00.000Z',
+                    source: 'account-a',
+                    auth_index: 0,
+                    tokens: {
+                      input_tokens: 100,
+                      output_tokens: 50,
+                      reasoning_tokens: 0,
+                      cached_tokens: 20,
+                      total_tokens: 170,
+                    },
+                    failed: false,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+    const legacyDetail = normalizeCliproxyUsageHistoryDetail({
+      model: incoming.model,
+      timestamp: incoming.timestamp,
+      source: incoming.source,
+      authIndex: incoming.authIndex,
+      inputTokens: incoming.inputTokens,
+      outputTokens: incoming.outputTokens,
+      cacheReadTokens: incoming.cacheReadTokens,
+      failed: incoming.failed,
+    });
+
+    expect(legacyDetail?.requestCount).toBe(1);
+    expect(Number.isFinite(legacyDetail?.cost)).toBe(true);
+
+    const merged = mergeCliproxyUsageHistoryDetails([legacyDetail!], [incoming]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].provider).toBe(incoming.provider);
+    expect(merged[0].cost).toBe(incoming.cost);
   });
 
   it('preserves legitimate duplicate requests when the incoming batch has more occurrences', () => {
