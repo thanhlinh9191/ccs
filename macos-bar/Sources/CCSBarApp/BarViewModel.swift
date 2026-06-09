@@ -15,15 +15,41 @@ final class BarViewModel: ObservableObject {
   @Published var iconStyle: BarIconStyle {
     didSet { MenuBarIcon.saveStyle(iconStyle) }
   }
+  /// Which figure leads the always-on title. Persisted; a change re-derives
+  /// `statusTitle` live because it is @Published.
+  @Published var glanceMode: BarGlanceMode
+  /// The alerts the most recent evaluation wanted delivered, surfaced in the
+  /// dropdown so users who deny notifications still see the conditions.
+  @Published var activeAlerts: [BarNotification] = []
 
   private let home: String
   private var client: CCSBarClient?
   private var debouncer = RefreshDebouncer(interval: 15)
+  private let prefs: BarPreferences
+  private let notifier: NotificationDelivering
 
-  init(home: String = NSHomeDirectory()) {
+  init(
+    home: String = NSHomeDirectory(),
+    prefs: BarPreferences = BarPreferences(),
+    notifier: NotificationDelivering? = nil
+  ) {
     self.home = home
+    self.prefs = prefs
+    // Seed registration defaults before the first pref read. Idempotent, and the
+    // App-level call is a redundant safety net for the @StateObject default-init
+    // ordering (stored-property defaults run before the App.init body).
+    prefs.registerDefaults()
+    // Default to the real UN-backed notifier; tests inject a recording one.
+    self.notifier = notifier ?? BarNotifier()
     self.iconStyle = MenuBarIcon.loadStyle()
+    self.glanceMode = prefs.load().glanceMode
     reconnect()
+  }
+
+  /// Re-read prefs after the preferences sheet writes through, so the next poll
+  /// (and the live title) reflects the change immediately.
+  func reloadPrefs() {
+    glanceMode = prefs.load().glanceMode
   }
 
   /// Toggle the menu-bar icon between the color mark and the mono template.
@@ -31,9 +57,11 @@ final class BarViewModel: ObservableObject {
     iconStyle = (iconStyle == .color) ? .mono : .color
   }
 
-  /// Compact status-bar title.
+  /// Compact status-bar title, resolved through the user's chosen glance mode.
   var statusTitle: String {
-    offline ? "CCS offline" : BarFormatting.statusTitle(rows: rows, analytics: analytics)
+    offline
+      ? "CCS offline"
+      : BarFormatting.statusTitle(rows: rows, analytics: analytics, mode: glanceMode)
   }
 
   /// Resolve the discovery file and (re)build the client. Marks offline when
@@ -85,6 +113,30 @@ final class BarViewModel: ObservableObject {
     if let fresh = try? await client.analytics() {
       analytics = fresh
     }
+
+    evaluateAlerts()
+  }
+
+  /// Run the pure rule engine once per poll against the freshly-loaded state,
+  /// deliver any new notifications, and overwrite the persisted fired-key set
+  /// verbatim. The engine's dedupe means repeated polls with unchanged state
+  /// deliver nothing, so this never spams. Delivery is best-effort and never
+  /// blocks the UI (the notifier hops to its own task).
+  private func evaluateAlerts() {
+    let current = prefs.load()
+    let eval = BarAlertEngine.evaluate(
+      rows: rows,
+      analytics: analytics,
+      prefs: current,
+      priorFiredKeys: prefs.firedKeys,
+      now: Date())
+    for notification in eval.toDeliver {
+      notifier.deliver(notification)
+    }
+    // Persist the COMPLETE next-state set verbatim (no merge) — this is what keeps
+    // the stored set bounded and lets cleared conditions re-arm.
+    prefs.firedKeys = eval.firedKeys
+    activeAlerts = eval.toDeliver
   }
 
   // MARK: Account actions

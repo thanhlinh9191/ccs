@@ -368,6 +368,423 @@ do {
   check(false, "surface analytics decode threw: \(error)")
 }
 
+// MARK: monthToDate decode (calendar MTD field, resilient default)
+
+do {
+  // Older payload WITHOUT monthToDate → decodes to a zero window (back-compat).
+  let a = try JSONDecoder().decode(BarAnalytics.self, from: analyticsJSON)
+  check(a.monthToDate.cost == 0, "monthToDate defaults to 0 cost when absent from payload")
+  check(a.monthToDate.requests == 0, "monthToDate defaults to 0 requests when absent")
+}
+do {
+  // Newer payload WITH monthToDate → decodes the real value, distinct from last30d.
+  let mtdJSON = """
+  {"today":{"cost":0,"requests":0},"last7d":{"cost":0,"requests":0},
+  "last30d":{"cost":35620.0,"requests":70973},"monthToDate":{"cost":1200.5,"requests":4096},
+  "allTime":{"cost":40844.0,"requests":91207},
+  "byDay":[\(buildByDayJSON(count: 30))],
+  "topModels":[],"topModelsWindow":"30d","hasRecentData":true,
+  "generatedAt":"2026-06-09T00:00:00.000Z"}
+  """.data(using: .utf8)!
+  let a = try JSONDecoder().decode(BarAnalytics.self, from: mtdJSON)
+  check(a.monthToDate.cost == 1200.5, "monthToDate decodes its own cost")
+  check(a.monthToDate.requests == 4096, "monthToDate decodes its own requests")
+  check(a.monthToDate.cost != a.last30d.cost, "monthToDate is distinct from rolling last30d")
+}
+
+// MARK: BarQuotaGauge band + fillFraction + countdown
+
+check(BarQuotaGauge.band(percentage: 82, status: "ok") == .green, "band >50 -> green")
+check(BarQuotaGauge.band(percentage: 51, status: "ok") == .green, "band 51 -> green (boundary)")
+check(BarQuotaGauge.band(percentage: 50, status: "ok") == .yellow, "band 50 -> yellow (boundary)")
+check(BarQuotaGauge.band(percentage: 21, status: "ok") == .yellow, "band 21 -> yellow")
+check(BarQuotaGauge.band(percentage: 20, status: "ok") == .orange, "band 20 -> orange (boundary)")
+check(BarQuotaGauge.band(percentage: 11, status: "ok") == .orange, "band 11 -> orange")
+check(BarQuotaGauge.band(percentage: 10, status: "ok") == .red, "band 10 -> red (boundary)")
+check(BarQuotaGauge.band(percentage: 0, status: "ok") == .red, "band 0 -> red")
+check(BarQuotaGauge.band(percentage: nil, status: "ok") == .none, "band nil pct -> none")
+check(BarQuotaGauge.band(percentage: 50, status: "unsupported") == .none, "band unsupported -> none")
+check(BarQuotaGauge.band(percentage: 50, status: "error") == .none, "band error -> none")
+
+check(BarQuotaGauge.fillFraction(percentage: 82, status: "ok") == 0.82, "fillFraction 82 -> 0.82")
+check(BarQuotaGauge.fillFraction(percentage: 0, status: "ok") == 0.0, "fillFraction 0 -> 0")
+check(BarQuotaGauge.fillFraction(percentage: 150, status: "ok") == 1.0, "fillFraction clamps >100 to 1")
+check(BarQuotaGauge.fillFraction(percentage: nil, status: "ok") == nil, "fillFraction nil pct -> nil")
+check(
+  BarQuotaGauge.fillFraction(percentage: 50, status: "unsupported") == nil,
+  "fillFraction unsupported -> nil")
+
+do {
+  let now = Date(timeIntervalSince1970: 1_000_000)
+  let in3h12m = now.addingTimeInterval(3 * 3600 + 12 * 60)
+  let iso = ISO8601DateFormatter().string(from: in3h12m)
+  check(
+    BarQuotaGauge.resetCountdown(nextReset: iso, now: now) == "resets in 3h 12m",
+    "resetCountdown formats hours+minutes")
+  let in12m = now.addingTimeInterval(12 * 60)
+  let iso12 = ISO8601DateFormatter().string(from: in12m)
+  check(
+    BarQuotaGauge.resetCountdown(nextReset: iso12, now: now) == "resets in 12m",
+    "resetCountdown formats minutes-only")
+  let past = now.addingTimeInterval(-60)
+  let isoPast = ISO8601DateFormatter().string(from: past)
+  check(
+    BarQuotaGauge.resetCountdown(nextReset: isoPast, now: now) == "resets soon",
+    "resetCountdown past -> 'resets soon'")
+  check(BarQuotaGauge.resetCountdown(nextReset: nil, now: now) == nil, "resetCountdown nil -> nil")
+  check(
+    BarQuotaGauge.resetCountdown(nextReset: "not-a-date", now: now) == nil,
+    "resetCountdown unparseable -> nil")
+}
+
+// MARK: Glance-mode title resolution (lifetime dollar NEVER appears)
+
+do {
+  let allTimeBig = mkAnalytics(allTimeCost: 40844, todayCost: 0)  // allTime is the largest window
+  let lifetime = BarFormatting.money(allTimeBig.allTime.cost)
+  let rows = [
+    BarSummaryRow(accountId: "a", provider: "ghcp", quotaStatus: "unsupported"),
+    BarSummaryRow(accountId: "b", provider: "kiro", quotaStatus: "unsupported"),
+  ]
+  // For EVERY mode, the title must never be the lifetime figure.
+  for mode in BarGlanceMode.allCases {
+    let t = BarFormatting.statusTitle(rows: rows, analytics: allTimeBig, mode: mode)
+    check(t != lifetime, "glance mode \(mode.rawValue): title never == lifetime dollar")
+  }
+
+  // .todaySpend leads with today when > 0, else falls back to .auto chain.
+  let todayA = mkAnalytics(allTimeCost: 40844, todayCost: 3.2)
+  check(
+    BarFormatting.statusTitle(rows: rows, analytics: todayA, mode: .todaySpend) == "$3.20",
+    "glance .todaySpend leads with today's spend")
+  check(
+    BarFormatting.statusTitle(rows: rows, analytics: allTimeBig, mode: .todaySpend) == "CCS 2",
+    "glance .todaySpend falls back to .auto when today==0")
+
+  // .monthSpend leads with monthToDate when > 0, else falls back.
+  func mkMonth(_ mtd: Double, today: Double = 0) -> BarAnalytics {
+    BarAnalytics(
+      today: .init(cost: today, requests: 0),
+      last7d: .init(cost: 0, requests: 0),
+      last30d: .init(cost: 35000, requests: 0),
+      monthToDate: .init(cost: mtd, requests: 0),
+      allTime: .init(cost: 40844, requests: 0),
+      byDay: [], topModels: [], topModelsWindow: "30d",
+      generatedAt: "2026-06-09T00:00:00Z")
+  }
+  check(
+    BarFormatting.statusTitle(rows: rows, analytics: mkMonth(1200.5), mode: .monthSpend)
+      == BarFormatting.money(1200.5),
+    "glance .monthSpend leads with calendar MTD")
+  check(
+    BarFormatting.statusTitle(rows: rows, analytics: mkMonth(0), mode: .monthSpend) == "CCS 2",
+    "glance .monthSpend falls back to .auto when MTD==0")
+  // MTD mode must NOT leak last30d (35000) even though it is far larger.
+  let mtdTitle = BarFormatting.statusTitle(rows: rows, analytics: mkMonth(1200.5), mode: .monthSpend)
+  check(!mtdTitle.contains("35"), "glance .monthSpend never shows last30d figure")
+
+  // .lowestQuota leads with the lowest ok-quota row, else falls back.
+  let quotaRows = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 90, quotaStatus: "ok"),
+    BarSummaryRow(accountId: "b", provider: "agy", quotaPercentage: 12, quotaStatus: "ok"),
+  ]
+  check(
+    BarFormatting.statusTitle(rows: quotaRows, analytics: nil, mode: .lowestQuota) == "agy 12%",
+    "glance .lowestQuota leads with lowest remaining quota")
+  check(
+    BarFormatting.statusTitle(rows: rows, analytics: allTimeBig, mode: .lowestQuota) == "CCS 2",
+    "glance .lowestQuota falls back to .auto with no ok-quota rows")
+
+  // .accountCount = non-paused count, never appends "!".
+  let pausedMix = [
+    BarSummaryRow(accountId: "a", provider: "ghcp", quotaStatus: "unsupported"),
+    BarSummaryRow(accountId: "b", provider: "kiro", paused: true, quotaStatus: "unsupported"),
+  ]
+  check(
+    BarFormatting.statusTitle(rows: pausedMix, analytics: nil, mode: .accountCount) == "CCS 1",
+    "glance .accountCount = non-paused count")
+  let allPaused = [
+    BarSummaryRow(accountId: "a", provider: "ghcp", paused: true, quotaStatus: "unsupported"),
+    BarSummaryRow(accountId: "b", provider: "kiro", paused: true, quotaStatus: "unsupported"),
+  ]
+  check(
+    BarFormatting.statusTitle(rows: allPaused, analytics: nil, mode: .accountCount) == "CCS 2",
+    "glance .accountCount falls back to total when all paused")
+  let reauthCount = [
+    BarSummaryRow(accountId: "a", provider: "ghcp", quotaStatus: "error", needsReauth: true)
+  ]
+  check(
+    !BarFormatting.statusTitle(rows: reauthCount, analytics: nil, mode: .accountCount).contains("!"),
+    "glance .accountCount never appends attention '!'")
+}
+
+// MARK: BarAlertPrefsStore dictionary codec + level parsing
+
+do {
+  // Empty dict -> all defaults.
+  let p = BarAlertPrefsStore.decode(from: [:])
+  check(p.quotaEnabled == true, "prefs default quotaEnabled true")
+  check(p.quotaLevels == [20, 10, 0], "prefs default quota levels 20,10,0")
+  check(p.dailyCapUSD == 500, "prefs default daily cap 500")
+  check(p.monthCapUSD == 10000, "prefs default month cap 10000")
+  check(p.glanceMode == .auto, "prefs default glance mode auto")
+
+  // Round-trip encode -> decode is identity.
+  let custom = BarAlertPrefs(
+    quotaEnabled: false, quotaLevels: [5, 25, 50], dailyCapUSD: 12.5, monthCapUSD: 2000,
+    glanceMode: .monthSpend)
+  let back = BarAlertPrefsStore.decode(from: BarAlertPrefsStore.encode(custom))
+  check(back.quotaEnabled == false, "prefs round-trip quotaEnabled")
+  check(back.quotaLevels == [50, 25, 5], "prefs round-trip levels sorted desc")
+  check(back.dailyCapUSD == 12.5, "prefs round-trip daily cap")
+  check(back.glanceMode == .monthSpend, "prefs round-trip glance mode")
+
+  // Level parsing: clamp, dedupe, sort desc; garbage tokens dropped.
+  check(
+    BarAlertPrefsStore.parseQuotaLevels("0, 10, 200, 10, -5, foo") == [100, 10, 0],
+    "parseQuotaLevels clamps/dedupes/sorts and drops garbage")
+}
+
+// MARK: BarAlertEngine — pure rule engine
+
+let engineNow = Date(timeIntervalSince1970: 1_700_000_000)  // fixed clock
+let utc = { () -> Calendar in
+  var c = Calendar(identifier: .gregorian)
+  c.timeZone = TimeZone(identifier: "UTC")!
+  return c
+}()
+
+func mkSpendAnalytics(today: Double, month: Double) -> BarAnalytics {
+  BarAnalytics(
+    today: .init(cost: today, requests: 0),
+    last7d: .init(cost: 0, requests: 0),
+    last30d: .init(cost: 99999, requests: 0),  // intentionally huge to prove it's unused
+    monthToDate: .init(cost: month, requests: 0),
+    allTime: .init(cost: 999999, requests: 0),  // intentionally huge to prove it's unused
+    byDay: [], topModels: [], topModelsWindow: "30d",
+    generatedAt: "2026-06-09T00:00:00Z")
+}
+
+// (A) Threshold cross: quota dropping below levels fires exactly ONE notif at the
+//     most-severe crossed level (L10 for remaining 5 with levels [20,10,0]).
+do {
+  let rows = [
+    BarSummaryRow(
+      accountId: "a", provider: "agy", quotaPercentage: 5, quotaStatus: "ok",
+      nextReset: "2026-07-01T00:00:00Z")
+  ]
+  let prefs = BarAlertPrefs(quotaLevels: [20, 10, 0])
+  let ev = BarAlertEngine.evaluate(
+    rows: rows, analytics: nil, prefs: prefs, priorFiredKeys: [], now: engineNow, calendar: utc)
+  let quotaNotifs = ev.toDeliver.filter { $0.kind == .quotaRemainingBelow }
+  check(quotaNotifs.count == 1, "quota cross fires exactly ONE notif (most-severe level)")
+  check(quotaNotifs.first?.id.hasSuffix("|L10") == true, "quota fires at most-severe crossed L10")
+  check(quotaNotifs.first?.body.contains("5%") == true, "quota body reports remaining %")
+}
+
+// (B) dailySpendAbove strict > ; silent at ==cap ; driven by today (not last30d/allTime).
+do {
+  let prefs = BarAlertPrefs(dailyCapUSD: 50)
+  let over = BarAlertEngine.evaluate(
+    rows: [], analytics: mkSpendAnalytics(today: 50.01, month: 0), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(
+    over.toDeliver.contains { $0.kind == .dailySpendAbove }, "daily spend fires when today > cap")
+  let atCap = BarAlertEngine.evaluate(
+    rows: [], analytics: mkSpendAnalytics(today: 50, month: 0), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(
+    !atCap.toDeliver.contains { $0.kind == .dailySpendAbove },
+    "daily spend silent at == cap (strict >)")
+}
+
+// (C) monthSpendAbove driven by monthToDate ONLY — huge last30d/allTime must not trigger.
+do {
+  let prefs = BarAlertPrefs(monthCapUSD: 1000)
+  // monthToDate UNDER cap but last30d (99999) and allTime (999999) huge → must NOT fire.
+  let under = BarAlertEngine.evaluate(
+    rows: [], analytics: mkSpendAnalytics(today: 0, month: 500), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(
+    !under.toDeliver.contains { $0.kind == .monthSpendAbove },
+    "month alert ignores last30d/allTime — silent when MTD under cap")
+  let over = BarAlertEngine.evaluate(
+    rows: [], analytics: mkSpendAnalytics(today: 0, month: 1500), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(
+    over.toDeliver.contains { $0.kind == .monthSpendAbove }, "month alert fires on MTD > cap")
+}
+
+// (D) Dedupe: a second identical evaluate with same now + same firedKeys → empty toDeliver.
+do {
+  let rows = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 5, quotaStatus: "ok",
+      nextReset: "2026-07-01T00:00:00Z")
+  ]
+  let prefs = BarAlertPrefs(dailyCapUSD: 10)
+  let a1 = BarAlertEngine.evaluate(
+    rows: rows, analytics: mkSpendAnalytics(today: 100, month: 5000), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(!a1.toDeliver.isEmpty, "first poll delivers notifs")
+  let a2 = BarAlertEngine.evaluate(
+    rows: rows, analytics: mkSpendAnalytics(today: 100, month: 5000), prefs: prefs,
+    priorFiredKeys: a1.firedKeys, now: engineNow, calendar: utc)
+  check(a2.toDeliver.isEmpty, "second identical poll delivers nothing (dedupe)")
+  check(a2.firedKeys == a1.firedKeys, "fired keys stable across identical polls")
+}
+
+// (E) Re-arm period: +1 day re-fires daily; +1 month re-fires month; new nextReset re-fires quota.
+do {
+  let prefs = BarAlertPrefs(dailyCapUSD: 10, monthCapUSD: 100)
+  let day0 = mkSpendAnalytics(today: 100, month: 500)
+  let p0 = BarAlertEngine.evaluate(
+    rows: [], analytics: day0, prefs: prefs, priorFiredKeys: [], now: engineNow, calendar: utc)
+  let nextDay = engineNow.addingTimeInterval(24 * 3600)
+  let p1 = BarAlertEngine.evaluate(
+    rows: [], analytics: day0, prefs: prefs, priorFiredKeys: p0.firedKeys, now: nextDay,
+    calendar: utc)
+  check(p1.toDeliver.contains { $0.kind == .dailySpendAbove }, "daily re-fires next calendar day")
+  let nextMonth = engineNow.addingTimeInterval(40 * 24 * 3600)
+  let p2 = BarAlertEngine.evaluate(
+    rows: [], analytics: day0, prefs: prefs, priorFiredKeys: p0.firedKeys, now: nextMonth,
+    calendar: utc)
+  check(p2.toDeliver.contains { $0.kind == .monthSpendAbove }, "month re-fires next calendar month")
+
+  // New nextReset string => new quota bucket => quota re-fires.
+  let q0rows = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 5, quotaStatus: "ok",
+      nextReset: "2026-07-01T00:00:00Z")
+  ]
+  let q0 = BarAlertEngine.evaluate(
+    rows: q0rows, analytics: nil, prefs: BarAlertPrefs(quotaLevels: [10]), priorFiredKeys: [],
+    now: engineNow, calendar: utc)
+  let q1rows = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 5, quotaStatus: "ok",
+      nextReset: "2026-08-01T00:00:00Z")
+  ]
+  let q1 = BarAlertEngine.evaluate(
+    rows: q1rows, analytics: nil, prefs: BarAlertPrefs(quotaLevels: [10]),
+    priorFiredKeys: q0.firedKeys, now: engineNow, calendar: utc)
+  check(
+    q1.toDeliver.contains { $0.kind == .quotaRemainingBelow },
+    "quota re-fires on a new next_reset bucket")
+}
+
+// (F) Re-arm clears-then-recurs: reauth true->fires->key set; false->key dropped; true->re-fires.
+do {
+  let onRows = [BarSummaryRow(accountId: "a", provider: "agy", needsReauth: true)]
+  let offRows = [BarSummaryRow(accountId: "a", provider: "agy", needsReauth: false)]
+  let s1 = BarAlertEngine.evaluate(
+    rows: onRows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: [], now: engineNow,
+    calendar: utc)
+  check(s1.toDeliver.contains { $0.kind == .reauthNeeded }, "reauth fires when needsReauth true")
+  check(
+    s1.firedKeys.contains { $0.hasPrefix("reauthNeeded|") }, "reauth key present after firing")
+  let s2 = BarAlertEngine.evaluate(
+    rows: offRows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: s1.firedKeys,
+    now: engineNow, calendar: utc)
+  check(
+    !s2.firedKeys.contains { $0.hasPrefix("reauthNeeded|") },
+    "reauth key dropped when condition clears")
+  let s3 = BarAlertEngine.evaluate(
+    rows: onRows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: s2.firedKeys,
+    now: engineNow, calendar: utc)
+  check(
+    s3.toDeliver.contains { $0.kind == .reauthNeeded }, "reauth re-fires after clear")
+
+  // Same clears-then-recurs behavior for accountCooldownOrPaused on `paused`.
+  let pOn = [BarSummaryRow(accountId: "a", provider: "agy", paused: true)]
+  let pOff = [BarSummaryRow(accountId: "a", provider: "agy", paused: false)]
+  let c1 = BarAlertEngine.evaluate(
+    rows: pOn, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: [], now: engineNow,
+    calendar: utc)
+  check(
+    c1.toDeliver.contains { $0.kind == .accountCooldownOrPaused }, "cooldown/paused fires on paused")
+  let c2 = BarAlertEngine.evaluate(
+    rows: pOff, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: c1.firedKeys, now: engineNow,
+    calendar: utc)
+  check(
+    !c2.firedKeys.contains { $0.hasPrefix("accountCooldownOrPaused|") },
+    "cooldown/paused key dropped when unpaused")
+}
+
+// (G) Prune / bounded: after day+month+reset rollover and account churn, fired set
+//     holds only current-bucket keys and no keys for absent accounts.
+do {
+  let prefs = BarAlertPrefs(quotaLevels: [10], dailyCapUSD: 10, monthCapUSD: 100)
+  let rowsT0 = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 5, quotaStatus: "ok",
+      nextReset: "2026-07-01T00:00:00Z", needsReauth: true)
+  ]
+  let t0 = BarAlertEngine.evaluate(
+    rows: rowsT0, analytics: mkSpendAnalytics(today: 100, month: 500), prefs: prefs,
+    priorFiredKeys: [], now: engineNow, calendar: utc)
+  check(t0.firedKeys.count >= 3, "t0 accumulates quota+daily+month+reauth keys")
+
+  // Roll a full month forward AND drop account "a", introduce account "b".
+  let later = engineNow.addingTimeInterval(40 * 24 * 3600)
+  let rowsT1 = [BarSummaryRow(accountId: "b", provider: "kiro", quotaStatus: "unsupported")]
+  let t1 = BarAlertEngine.evaluate(
+    rows: rowsT1, analytics: mkSpendAnalytics(today: 0, month: 0), prefs: prefs,
+    priorFiredKeys: t0.firedKeys, now: later, calendar: utc)
+  check(
+    !t1.firedKeys.contains { $0.contains("|agy:a|") || $0.hasSuffix("|agy:a|on") },
+    "prune drops keys for departed account a")
+  // Stale daily/month/quota buckets from t0 are gone (bucket rolled), so the set
+  // collapses to only what's currently true (account b has no alerts) → empty.
+  check(t1.firedKeys.isEmpty, "prune collapses stale-bucket + absent-account keys (bounded)")
+}
+
+// (H) Deterministic order: shuffled rows produce notifs in stable id order.
+do {
+  let rows = [
+    BarSummaryRow(accountId: "z", provider: "agy", needsReauth: true),
+    BarSummaryRow(accountId: "a", provider: "agy", needsReauth: true),
+  ]
+  let ev = BarAlertEngine.evaluate(
+    rows: rows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: [], now: engineNow,
+    calendar: utc)
+  let reauthIds = ev.toDeliver.filter { $0.kind == .reauthNeeded }.map { $0.id }
+  check(
+    reauthIds == reauthIds.sorted(), "engine emits notifs in stable account-id order")
+}
+
+// (I) Delivery wrapper (structural): RecordingNotifier (Core protocol) gets exactly
+//     the toDeliver ids; a repeat poll delivers nothing.
+final class RecordingNotifier: NotificationDelivering, @unchecked Sendable {
+  var delivered: [String] = []
+  func deliver(_ n: BarNotification) { delivered.append(n.id) }
+}
+do {
+  let notifier = RecordingNotifier()
+  let rows = [BarSummaryRow(accountId: "a", provider: "agy", needsReauth: true)]
+  let ev = BarAlertEngine.evaluate(
+    rows: rows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: [], now: engineNow,
+    calendar: utc)
+  for n in ev.toDeliver { notifier.deliver(n) }
+  check(notifier.delivered == ev.toDeliver.map { $0.id }, "notifier delivered ids == toDeliver ids")
+  let ev2 = BarAlertEngine.evaluate(
+    rows: rows, analytics: nil, prefs: BarAlertPrefs(), priorFiredKeys: ev.firedKeys, now: engineNow,
+    calendar: utc)
+  let before = notifier.delivered.count
+  for n in ev2.toDeliver { notifier.deliver(n) }
+  check(notifier.delivered.count == before, "repeat poll delivers nothing through notifier")
+}
+
+// (J) Disabled rule: quota disabled => no quota notif even on a deep cross.
+do {
+  let rows = [
+    BarSummaryRow(accountId: "a", provider: "agy", quotaPercentage: 1, quotaStatus: "ok",
+      nextReset: "2026-07-01T00:00:00Z")
+  ]
+  let ev = BarAlertEngine.evaluate(
+    rows: rows, analytics: nil, prefs: BarAlertPrefs(quotaEnabled: false), priorFiredKeys: [],
+    now: engineNow, calendar: utc)
+  check(
+    !ev.toDeliver.contains { $0.kind == .quotaRemainingBelow },
+    "disabled quota rule never fires")
+}
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 

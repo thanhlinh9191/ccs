@@ -7,6 +7,11 @@ import CCSBarCore
 /// footer controls.
 struct BarMenuView: View {
   @ObservedObject var viewModel: BarViewModel
+  /// Drives the preferences sheet from the footer gear.
+  @State private var showingPrefs = false
+  /// The prefs adapter the sheet edits; shares the standard suite with the
+  /// view model so a write-through is visible on the next poll.
+  private let prefs = BarPreferences()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -23,6 +28,17 @@ struct BarMenuView: View {
           VStack(alignment: .leading, spacing: 10) {
             if let analytics = viewModel.analytics {
               BarAnalyticsView(analytics: analytics)
+            }
+
+            // In-dropdown alert list: surfaces the conditions the engine flagged
+            // this poll so users who deny system notifications still see them.
+            if !viewModel.activeAlerts.isEmpty {
+              VStack(alignment: .leading, spacing: 6) {
+                SectionLabel("Alerts")
+                ForEach(viewModel.activeAlerts) { alert in
+                  AlertRow(alert: alert)
+                }
+              }
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -55,6 +71,9 @@ struct BarMenuView: View {
     }
     .frame(width: 340)
     .onAppear { viewModel.onOpen() }
+    .sheet(isPresented: $showingPrefs) {
+      BarPreferencesView(viewModel: viewModel, prefs: prefs)
+    }
   }
 
   private var header: some View {
@@ -101,6 +120,12 @@ struct BarMenuView: View {
         )
       }
       .help("Toggle the menu-bar icon between color and monochrome")
+      Button {
+        showingPrefs = true
+      } label: {
+        Label("Alerts", systemImage: "bell.badge")
+      }
+      .help("Configure alerts and the menu-bar glance")
       Spacer()
       Button {
         viewModel.onOpen()
@@ -165,9 +190,10 @@ struct BarRowView: View {
         HStack(spacing: 6) {
           Chip(row.provider, tint: BarTheme.accent)
           if let tier = row.tier { Chip(tier, tint: .secondary) }
-          Text(BarFormatting.quotaLabel(percentage: row.quotaPercentage, status: row.quotaStatus))
-            .font(.caption2)
-            .foregroundStyle(quotaColor)
+          QuotaGaugeView(
+            percentage: row.quotaPercentage,
+            status: row.quotaStatus,
+            nextReset: row.nextReset)
         }
         if let lastActive = BarFormatting.lastActiveLabel(
           iso: row.lastActivityAt, daysSince: nil)
@@ -245,13 +271,62 @@ struct BarRowView: View {
     default: return .green
     }
   }
+}
 
-  /// Quota label color: muted for "no quota", warning-tinted for "quota ?".
-  private var quotaColor: Color {
-    switch row.quotaStatus {
-    case "unsupported": return .secondary
-    case "error": return .orange
-    default: return .secondary
+/// Per-account quota gauge. When the row has a live "ok" quota with a percentage,
+/// renders a thin colored bar (filled by the remaining fraction, tinted by the
+/// severity band) plus a "resets in …" caption. When there is no live quota it
+/// falls back to the honest text label ("no quota" / "quota ?"). All branch,
+/// color, and countdown logic lives in the pure Core `BarQuotaGauge`; this view
+/// is a thin render.
+struct QuotaGaugeView: View {
+  let percentage: Double?
+  let status: String
+  let nextReset: String?
+
+  var body: some View {
+    let band = BarQuotaGauge.band(percentage: percentage, status: status)
+    if band != .none, let fill = BarQuotaGauge.fillFraction(percentage: percentage, status: status) {
+      HStack(spacing: 5) {
+        gaugeBar(fill: fill, color: color(for: band))
+        Text(BarFormatting.quotaLabel(percentage: percentage, status: status))
+          .font(.system(.caption2, design: .monospaced))
+          .foregroundStyle(color(for: band))
+        if let countdown = BarQuotaGauge.resetCountdown(nextReset: nextReset, now: Date()) {
+          Text(countdown)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+      }
+    } else {
+      // No live quota: keep the existing honest text ("no quota" / "quota ?").
+      Text(BarFormatting.quotaLabel(percentage: percentage, status: status))
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func gaugeBar(fill: Double, color: Color) -> some View {
+    GeometryReader { geo in
+      ZStack(alignment: .leading) {
+        Capsule()
+          .fill(Color.primary.opacity(0.12))
+        Capsule()
+          .fill(color)
+          .frame(width: max(2, geo.size.width * fill))
+      }
+    }
+    .frame(width: 44, height: 5)
+  }
+
+  private func color(for band: BarQuotaGauge.Band) -> Color {
+    switch band {
+    case .green: return .green
+    case .yellow: return .yellow
+    case .orange: return .orange
+    case .red: return .red
+    case .none: return .secondary
     }
   }
 }
@@ -273,6 +348,53 @@ struct ErrorBanner: View {
     .padding(.horizontal, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+  }
+}
+
+/// One in-dropdown alert row. Mirrors a delivered notification so the conditions
+/// are visible even when system notifications are denied. The icon is keyed off
+/// the alert kind so each rule reads at a glance.
+struct AlertRow: View {
+  let alert: BarNotification
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 6) {
+      Image(systemName: icon)
+        .foregroundStyle(tint)
+        .font(.caption)
+        .padding(.top, 1)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(alert.title)
+          .font(.caption.weight(.medium))
+        Text(alert.body)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.vertical, 5)
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+  }
+
+  private var icon: String {
+    switch alert.kind {
+    case .quotaRemainingBelow: return "gauge.with.dots.needle.bottom.0percent"
+    case .dailySpendAbove, .monthSpendAbove: return "dollarsign.circle"
+    case .reauthNeeded: return "key.slash"
+    case .accountCooldownOrPaused: return "pause.circle"
+    }
+  }
+
+  private var tint: Color {
+    switch alert.kind {
+    case .quotaRemainingBelow: return .orange
+    case .dailySpendAbove, .monthSpendAbove: return BarTheme.accent
+    case .reauthNeeded: return .red
+    case .accountCooldownOrPaused: return .secondary
+    }
   }
 }
 

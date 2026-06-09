@@ -7,6 +7,13 @@ import SwiftUI
 struct CCSBarApp: App {
   @StateObject private var viewModel = BarViewModel()
 
+  init() {
+    // Seed the registration domain BEFORE any pref read so absent Bool keys
+    // resolve to their real defaults (true) instead of reading back as false,
+    // which would silently disable every alert on a fresh install.
+    BarPreferences().registerDefaults()
+  }
+
   var body: some Scene {
     MenuBarExtra {
       BarMenuView(viewModel: viewModel)

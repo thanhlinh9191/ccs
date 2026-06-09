@@ -60,6 +60,10 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
   public let today: Window
   public let last7d: Window
   public let last30d: Window
+  /// Honest calendar month-to-date (1st of the current local month → now), NOT a
+  /// rolling 30 days. A fresh month resets this toward ~0 even when `last30d`
+  /// stays populated, so a monthly-cap alert measures the real billing month.
+  public let monthToDate: Window
   public let allTime: Window
   /// Oldest → newest, exactly 30 zero-filled entries, for the sparkline.
   public let byDay: [Day]
@@ -83,6 +87,7 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     today: Window,
     last7d: Window,
     last30d: Window,
+    monthToDate: Window = Window(cost: 0, requests: 0),
     allTime: Window,
     byDay: [Day],
     topModels: [Model],
@@ -96,6 +101,7 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     self.today = today
     self.last7d = last7d
     self.last30d = last30d
+    self.monthToDate = monthToDate
     self.allTime = allTime
     self.byDay = byDay
     self.topModels = topModels
@@ -115,6 +121,10 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     today = try c.decode(Window.self, forKey: .today)
     last7d = try c.decode(Window.self, forKey: .last7d)
     last30d = try c.decode(Window.self, forKey: .last30d)
+    // `monthToDate` is a newer field; older cached payloads omit it. Default to a
+    // zero window so a stale cache decodes cleanly instead of throwing.
+    monthToDate =
+      (try c.decodeIfPresent(Window.self, forKey: .monthToDate)) ?? Window(cost: 0, requests: 0)
     allTime = try c.decode(Window.self, forKey: .allTime)
     byDay = try c.decode([Day].self, forKey: .byDay)
     topModels = try c.decode([Model].self, forKey: .topModels)

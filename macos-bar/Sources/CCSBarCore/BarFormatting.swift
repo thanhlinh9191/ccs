@@ -94,6 +94,48 @@ public enum BarFormatting {
     return "CCS \(activeCount > 0 ? activeCount : rows.count)"
   }
 
+  /// Glance-mode title resolver. The user picks which figure leads the menu-bar
+  /// title; every mode degrades to the `.auto` fallback chain rather than show a
+  /// dead "$0.00" or a misleading lifetime dollar. A LIFETIME / allTime figure
+  /// NEVER appears in any mode — that invariant is what keeps the always-on bar
+  /// from reading like live spend.
+  public static func statusTitle(
+    rows: [BarSummaryRow], analytics: BarAnalytics?, mode: BarGlanceMode
+  ) -> String {
+    switch mode {
+    case .auto:
+      return statusTitle(rows: rows, analytics: analytics)
+
+    case .todaySpend:
+      // Avoid a dead "$0.00" sitting in the bar: only lead with today's spend
+      // when there is some; otherwise fall through to the auto chain.
+      if let c = analytics?.today.cost, c > 0 { return money(c) }
+      return statusTitle(rows: rows, analytics: analytics)
+
+    case .monthSpend:
+      // Calendar month-to-date (the new backend field), NOT last30d/allTime.
+      if let c = analytics?.monthToDate.cost, c > 0 { return money(c) }
+      return statusTitle(rows: rows, analytics: analytics)
+
+    case .lowestQuota:
+      // Step (1) of the auto chain only: lowest remaining "ok" quota.
+      let quotaRows = rows.filter { $0.quotaStatus == "ok" && $0.quotaPercentage != nil }
+      if let lead = quotaRows.min(by: { ($0.quotaPercentage ?? 0) < ($1.quotaPercentage ?? 0) }),
+        let token = quotaTitleToken(percentage: lead.quotaPercentage, status: lead.quotaStatus)
+      {
+        return "\(lead.provider) \(token)"
+      }
+      return statusTitle(rows: rows, analytics: analytics)
+
+    case .accountCount:
+      // Non-paused count, falling back to total when every account is paused.
+      // Never appends "!" — that attention marker is an .auto-only signal.
+      if rows.isEmpty { return statusTitle(rows: rows, analytics: analytics) }
+      let active = rows.filter { !$0.paused }.count
+      return "CCS \(active > 0 ? active : rows.count)"
+    }
+  }
+
   /// The "headline" account for the dropdown when no quota exists (which account
   /// name leads). Deterministic: prefer the default row, else the sole active
   /// row, else alphabetical by id — never `rows.first` (arbitrary order).
