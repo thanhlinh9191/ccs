@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI  // for ColorScheme equality in the theme-token checks
 import CCSBarCore
 
 // Lightweight assert harness used in place of XCTest (unavailable without a
@@ -1252,6 +1253,98 @@ do {
   check(single == nil, "headroom: <2 eligible subscriptions -> nil")
 
   check(BarQuotaGauge.headroomLeader([]) == nil, "headroom: empty -> nil")
+}
+
+// MARK: - Theme token model (BarPalette / BarAppearance / BarTheme)
+//
+// These assert on the raw RGB Doubles, NOT on SwiftUI Color equality (which is
+// unreliable — identical components are not guaranteed `==`). The dark values
+// are the regression lock: they must equal the original Sparkline constants.
+
+// Forced-scheme mapping: .system inherits OS, .light/.dark override.
+check(BarAppearance.system.forced == nil, "appearance .system -> forced nil (inherit OS)")
+check(BarAppearance.light.forced == .light, "appearance .light -> forced .light")
+check(BarAppearance.dark.forced == .dark, "appearance .dark -> forced .dark")
+check(BarAppearance.allCases.count == 3, "appearance has exactly 3 cases")
+
+// DARK == today (regression lock). Exact constants from the original
+// Sparkline BarTheme enum — any drift fails the build.
+check(BarPalette.dark.accentRGB == RGB(0.886, 0.451, 0.137), "dark accent == #E2732A (locked)")
+check(
+  BarPalette.dark.subscriptionRGB == RGB(0.357, 0.388, 0.851),
+  "dark subscription == #5B63D9 (locked)")
+check(BarPalette.dark.bandGreenRGB == RGB(0.36, 0.74, 0.56), "dark bandGreen == #5CBC8F (locked)")
+check(BarPalette.dark.bandAmberRGB == RGB(0.86, 0.67, 0.31), "dark bandAmber == #DBAB4F (locked)")
+check(BarPalette.dark.bandCoralRGB == RGB(0.91, 0.46, 0.36), "dark bandCoral == #E8755C (locked)")
+check(BarPalette.dark.bandRedRGB == RGB(0.85, 0.34, 0.31), "dark bandRed == #D9564F (locked)")
+
+// LIGHT differs from DARK for every themed token (so light can't silently
+// collapse back to dark) AND equals the locked light values.
+check(BarPalette.light.accentRGB != BarPalette.dark.accentRGB, "light accent differs from dark")
+check(
+  BarPalette.light.subscriptionRGB != BarPalette.dark.subscriptionRGB,
+  "light subscription differs from dark")
+check(
+  BarPalette.light.bandGreenRGB != BarPalette.dark.bandGreenRGB, "light bandGreen differs from dark")
+check(
+  BarPalette.light.bandAmberRGB != BarPalette.dark.bandAmberRGB, "light bandAmber differs from dark")
+check(
+  BarPalette.light.bandCoralRGB != BarPalette.dark.bandCoralRGB, "light bandCoral differs from dark")
+check(BarPalette.light.bandRedRGB != BarPalette.dark.bandRedRGB, "light bandRed differs from dark")
+
+check(BarPalette.light.accentRGB == RGB(0.812, 0.357, 0.063), "light accent == #CF5B10 (locked)")
+check(
+  BarPalette.light.subscriptionRGB == RGB(0.275, 0.302, 0.745),
+  "light subscription == #464DBE (locked)")
+check(BarPalette.light.bandGreenRGB == RGB(0.106, 0.580, 0.357), "light bandGreen == #1B945B (locked)")
+check(BarPalette.light.bandAmberRGB == RGB(0.722, 0.490, 0.043), "light bandAmber == #B87D0B (locked)")
+check(BarPalette.light.bandCoralRGB == RGB(0.831, 0.302, 0.157), "light bandCoral == #D44D28 (locked)")
+check(BarPalette.light.bandRedRGB == RGB(0.776, 0.157, 0.137), "light bandRed == #C62823 (locked)")
+
+// Light ramp separability: the four band colors must be mutually distinct so
+// the green→amber→coral→red status ramp stays readable on the light plate.
+// (We assert distinctness, not a lightness ordering: hue, not luminance, is what
+// separates these bands — amber and coral are intentionally near in luminance.)
+let lightBands = [
+  BarPalette.light.bandGreenRGB, BarPalette.light.bandAmberRGB,
+  BarPalette.light.bandCoralRGB, BarPalette.light.bandRedRGB,
+]
+check(Set(lightBands.map { "\($0.r),\($0.g),\($0.b)" }).count == 4, "light ramp: 4 distinct bands")
+// Red is the deepest/most-saturated end of the ramp: it has the lowest green
+// channel, anchoring "critical" as the visually heaviest band.
+check(
+  BarPalette.light.bandRedRGB.g < BarPalette.light.bandGreenRGB.g
+    && BarPalette.light.bandRedRGB.g < BarPalette.light.bandAmberRGB.g
+    && BarPalette.light.bandRedRGB.g < BarPalette.light.bandCoralRGB.g,
+  "light ramp: red has the lowest green channel (critical anchor)")
+
+// Resolver picks the right palette per scheme (verified via the stored palette
+// ref, staying Color-equality-free).
+check(BarTheme.resolve(.dark).palette == BarPalette.dark, "resolve(.dark) draws from dark palette")
+check(
+  BarTheme.resolve(.light).palette == BarPalette.light, "resolve(.light) draws from light palette")
+check(BarTheme.dark.palette == BarPalette.dark, "BarTheme.dark preset uses dark palette")
+check(BarTheme.light.palette == BarPalette.light, "BarTheme.light preset uses light palette")
+check(BarThemeKey.defaultValue.palette == BarPalette.dark, "environment default is the dark preset")
+
+// BarAppearanceStore round-trips, defaults to .dark on an absent key. Use an
+// isolated suite so we never pollute (or depend on) real user defaults.
+do {
+  let suiteName = "ccs-bar-check-\(ProcessInfo.processInfo.globallyUniqueString)"
+  let defaults = UserDefaults(suiteName: suiteName)!
+  defaults.removeObject(forKey: BarAppearanceStore.defaultsKey)
+  // Absent key -> .dark (the no-registration fallback).
+  let raw = defaults.string(forKey: BarAppearanceStore.defaultsKey) ?? BarAppearance.dark.rawValue
+  check(BarAppearance(rawValue: raw) == .dark, "appearance store defaults to .dark on absent key")
+  // Round-trip save(.light) -> load().
+  defaults.set(BarAppearance.light.rawValue, forKey: BarAppearanceStore.defaultsKey)
+  let back = BarAppearance(rawValue: defaults.string(forKey: BarAppearanceStore.defaultsKey) ?? "")
+  check(back == .light, "appearance store round-trips save(.light) -> load() == .light")
+  // Garbage string -> nil (load() coalesces to .dark).
+  defaults.set("nonsense", forKey: BarAppearanceStore.defaultsKey)
+  let g = BarAppearance(rawValue: defaults.string(forKey: BarAppearanceStore.defaultsKey) ?? "")
+  check(g == nil, "appearance store: garbage raw -> nil (load() coalesces to .dark)")
+  defaults.removePersistentDomain(forName: suiteName)
 }
 
 // cleanup

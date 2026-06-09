@@ -11,6 +11,7 @@ import CCSBarCore
 /// highlighted and is the only place where the at-risk pace warning appears.
 /// Verbose prose lines ("week window · resets in ...") are removed entirely.
 struct BarSubscriptionCard: View {
+  @Environment(\.barTheme) private var theme
   let row: BarSummaryRow
   /// Injected clock — defaults to live Date() in production, pinned in previews
   /// and tests so countdown math is deterministic.
@@ -36,7 +37,7 @@ struct BarSubscriptionCard: View {
     .padding(.horizontal, 10)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      BarTheme.cardSurface,
+      theme.cardSurface,
       in: RoundedRectangle(cornerRadius: 9))
   }
 
@@ -53,11 +54,11 @@ struct BarSubscriptionCard: View {
         .font(.system(.body, design: .default).weight(.semibold))
         .lineLimit(1)
       if row.needsReauth {
-        Chip("reauth", tint: BarTheme.bandRed)
+        Chip("reauth", tint: theme.bandRed)
       }
       Spacer(minLength: 4)
       if let tier = row.tier {
-        Chip(tier, tint: BarTheme.subscription)
+        Chip(tier, tint: theme.subscription)
       }
     }
   }
@@ -149,7 +150,7 @@ struct BarSubscriptionCard: View {
       if isAtRisk, let pace = paceWarningText(for: w) {
         Text(pace)
           .font(.system(.caption2, design: .monospaced))
-          .foregroundStyle(BarTheme.bandCoral)
+          .foregroundStyle(theme.bandCoral)
           .lineLimit(1)
           .padding(.leading, 5)
       }
@@ -244,18 +245,18 @@ struct BarSubscriptionCard: View {
 
   private var healthColor: Color {
     switch row.health {
-    case "error": return BarTheme.bandRed
-    case "warning": return BarTheme.bandAmber
-    default: return BarTheme.bandGreen
+    case "error": return theme.bandRed
+    case "warning": return theme.bandAmber
+    default: return theme.bandGreen
     }
   }
 
   private func color(for band: BarQuotaGauge.Band) -> Color {
     switch band {
-    case .green: return BarTheme.bandGreen
-    case .yellow: return BarTheme.bandAmber
-    case .orange: return BarTheme.bandCoral
-    case .red: return BarTheme.bandRed
+    case .green: return theme.bandGreen
+    case .yellow: return theme.bandAmber
+    case .orange: return theme.bandCoral
+    case .red: return theme.bandRed
     case .none: return .secondary
     }
   }

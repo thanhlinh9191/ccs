@@ -253,6 +253,7 @@ struct BarMenuView: View {
 /// muted "no data" when unknown vs a real "$0.00"), a visible pause/resume
 /// toggle, and the overflow menu (set-default / solo / tier-lock).
 struct BarRowView: View {
+  @Environment(\.barTheme) private var theme
   let row: BarSummaryRow
   @ObservedObject var viewModel: BarViewModel
 
@@ -276,22 +277,22 @@ struct BarRowView: View {
             .lineLimit(1)
             .truncationMode(.middle)
           if row.isDefault {
-            Chip("default", tint: BarTheme.accent)
+            Chip("default", tint: theme.accent)
           }
           if row.paused {
             Chip("paused", tint: .secondary)
           }
           if row.needsReauth {
-            Chip("reauth", tint: .red)
+            Chip("reauth", tint: theme.bandRed)
           }
           if isNativeSubscription {
-            Chip("subscription", tint: BarTheme.subscription)
+            Chip("subscription", tint: theme.subscription)
           }
         }
         HStack(spacing: 6) {
           Chip(
             BarFormatting.providerLabel(row.provider),
-            tint: isNativeSubscription ? BarTheme.subscription : BarTheme.accent)
+            tint: isNativeSubscription ? theme.subscription : theme.accent)
           if let tier = row.tier { Chip(tier, tint: .secondary) }
           QuotaGaugeView(
             percentage: row.quotaPercentage,
@@ -368,10 +369,12 @@ struct BarRowView: View {
   /// arrive as health "ok" (green) — no permanent orange dot. Orange is reserved
   /// for genuine transient fetch failures, red for accounts needing reauth.
   private var healthColor: Color {
+    // Use the themed band ramp (not raw system .red/.orange/.green) so the dot
+    // matches the rest of the dropdown and stays legible on both plates.
     switch row.health {
-    case "error": return .red
-    case "warning": return .orange
-    default: return .green
+    case "error": return theme.bandRed
+    case "warning": return theme.bandAmber
+    default: return theme.bandGreen
     }
   }
 }
@@ -383,6 +386,7 @@ struct BarRowView: View {
 /// color, and countdown logic lives in the pure Core `BarQuotaGauge`; this view
 /// is a thin render.
 struct QuotaGaugeView: View {
+  @Environment(\.barTheme) private var theme
   let percentage: Double?
   let status: String
   let nextReset: String?
@@ -424,11 +428,14 @@ struct QuotaGaugeView: View {
   }
 
   private func color(for band: BarQuotaGauge.Band) -> Color {
+    // Themed band ramp for whole-dropdown consistency. .orange maps to the coral
+    // band (the warning step in the green→amber→coral→red ramp) so it stays
+    // distinct from the brand accent orange on both plates.
     switch band {
-    case .green: return .green
-    case .yellow: return .yellow
-    case .orange: return .orange
-    case .red: return .red
+    case .green: return theme.bandGreen
+    case .yellow: return theme.bandAmber
+    case .orange: return theme.bandCoral
+    case .red: return theme.bandRed
     case .none: return .secondary
     }
   }
@@ -437,11 +444,12 @@ struct QuotaGaugeView: View {
 /// Inline banner surfacing the last failed action so it is visible rather than
 /// silently swallowed. Success is confirmed by the default/paused badge updating.
 struct ErrorBanner: View {
+  @Environment(\.barTheme) private var theme
   let message: String
   var body: some View {
     HStack(spacing: 6) {
       Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(.orange)
+        .foregroundStyle(theme.accent)
       Text(message)
         .font(.caption2)
         .foregroundStyle(.secondary)
@@ -450,7 +458,7 @@ struct ErrorBanner: View {
     .padding(.vertical, 5)
     .padding(.horizontal, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+    .background(theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
   }
 }
 
@@ -458,6 +466,7 @@ struct ErrorBanner: View {
 /// are visible even when system notifications are denied. The icon is keyed off
 /// the alert kind so each rule reads at a glance.
 struct AlertRow: View {
+  @Environment(\.barTheme) private var theme
   let alert: BarNotification
 
   var body: some View {
@@ -492,10 +501,12 @@ struct AlertRow: View {
   }
 
   private var tint: Color {
+    // Themed: quota warnings take the brand accent, reauth the critical band,
+    // so alert chips match the rest of the dropdown on both plates.
     switch alert.kind {
-    case .quotaRemainingBelow: return .orange
-    case .dailySpendAbove, .monthSpendAbove: return BarTheme.accent
-    case .reauthNeeded: return .red
+    case .quotaRemainingBelow: return theme.accent
+    case .dailySpendAbove, .monthSpendAbove: return theme.accent
+    case .reauthNeeded: return theme.bandRed
     case .accountCooldownOrPaused: return .secondary
     }
   }
@@ -503,17 +514,22 @@ struct AlertRow: View {
 
 /// Small pill label used in account sublines.
 struct Chip: View {
+  @Environment(\.colorScheme) private var colorScheme
   let text: String
   let tint: Color
   init(_ text: String, tint: Color) {
     self.text = text
     self.tint = tint
   }
-  /// Lift the tint toward white so the small 9pt label stays legible on the dark
-  /// surface — the raw tint (e.g. the indigo subscription color) was too dim to read.
+  /// Lift the small 9pt label toward the opposite of the surface so it stays
+  /// legible: toward white on the dark plate (the raw indigo subscription tint
+  /// was too dim to read), toward black on the light plate (lifting toward white
+  /// there would wash the text out). The forced scheme is already in effect on
+  /// this subtree, so `colorScheme` reflects exactly the plate being drawn.
   private var textColor: Color {
     if tint == .secondary { return .secondary }
-    let lifted = NSColor(tint).blended(withFraction: 0.5, of: .white) ?? NSColor(tint)
+    let target: NSColor = (colorScheme == .light) ? .black : .white
+    let lifted = NSColor(tint).blended(withFraction: 0.5, of: target) ?? NSColor(tint)
     return Color(nsColor: lifted)
   }
   var body: some View {

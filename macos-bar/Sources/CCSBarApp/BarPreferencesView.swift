@@ -9,6 +9,7 @@ struct BarPreferencesView: View {
   @ObservedObject var viewModel: BarViewModel
   let prefs: BarPreferences
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.barTheme) private var theme
 
   // Local editable mirror of the persisted prefs. Loaded on appear; each change
   // is written through immediately so there is no separate "save" step.
@@ -22,6 +23,7 @@ struct BarPreferencesView: View {
       header
       Divider()
       Form {
+        appearanceSection
         glanceSection
         quotaSection
         spendSection
@@ -39,12 +41,27 @@ struct BarPreferencesView: View {
   private var header: some View {
     HStack(spacing: 8) {
       Image(systemName: "bell.badge")
-        .foregroundStyle(BarTheme.accent)
+        .foregroundStyle(theme.accent)
       Text("Alerts & Glance").font(.headline)
       Spacer()
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
+  }
+
+  /// Theme picker — placed first because it affects the whole dropdown, so it is
+  /// the most prominent setting. Bound directly to `$viewModel.appearance` (NOT
+  /// the alert-pref draft): appearance is global chrome, its `didSet` persists,
+  /// and @Published drives the live re-render — no writeThrough() needed.
+  private var appearanceSection: some View {
+    Section("Appearance") {
+      Picker("Menu bar theme", selection: $viewModel.appearance) {
+        Text("System").tag(BarAppearance.system)
+        Text("Light").tag(BarAppearance.light)
+        Text("Dark").tag(BarAppearance.dark)
+      }
+      .pickerStyle(.segmented)
+    }
   }
 
   private var glanceSection: some View {

@@ -12,6 +12,7 @@ import CCSBarCore
 /// When the trailing 30 days carry no spend the strip reads the honest idle line
 /// ("No usage in N days") instead of three dead "$0.00" cells.
 struct BarAnalyticsView: View {
+  @Environment(\.barTheme) private var theme
   let analytics: BarAnalytics
   /// Which slot of the dropdown this instance renders. `.spend` is the thin strip
   /// placed below the subscriptions cockpit; `.breakdown` is the by-surface /
@@ -73,7 +74,8 @@ struct BarAnalyticsView: View {
           .font(.caption2)
           .foregroundStyle(.secondary)
         if !sparklineIsEmpty {
-          Sparkline(values: analytics.byDay.map(\.cost)).frame(height: 16)
+          Sparkline(values: analytics.byDay.map(\.cost), accent: theme.accent)
+            .frame(height: 16)
         }
       } else {
         Text(idleCaption)
@@ -106,6 +108,7 @@ struct BarAnalyticsView: View {
 /// One usage-surface row: surface name + proportional accent bar + cost and
 /// request count. Mirrors ModelBar visually so the two sections feel cohesive.
 private struct SurfaceBar: View {
+  @Environment(\.barTheme) private var theme
   let surface: BarAnalyticsSurface
   let peak: Double
 
@@ -114,7 +117,7 @@ private struct SurfaceBar: View {
       let fraction = peak > 0 ? CGFloat(surface.cost / peak) : 0
       ZStack(alignment: .leading) {
         RoundedRectangle(cornerRadius: 5)
-          .fill(BarTheme.accent.opacity(0.16))
+          .fill(theme.accent.opacity(0.16))
           .frame(width: max(8, geo.size.width * fraction))
         HStack {
           Text(surface.surface)
@@ -140,6 +143,7 @@ private struct SurfaceBar: View {
 
 /// One top-model row: name + spend with a proportional accent bar behind.
 private struct ModelBar: View {
+  @Environment(\.barTheme) private var theme
   let model: BarAnalytics.Model
   let peak: Double
 
@@ -148,7 +152,7 @@ private struct ModelBar: View {
       let fraction = peak > 0 ? CGFloat(model.cost / peak) : 0
       ZStack(alignment: .leading) {
         RoundedRectangle(cornerRadius: 5)
-          .fill(BarTheme.accent.opacity(0.16))
+          .fill(theme.accent.opacity(0.16))
           .frame(width: max(8, geo.size.width * fraction))
         HStack {
           Text(model.model)

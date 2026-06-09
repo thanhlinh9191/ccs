@@ -15,6 +15,13 @@ final class BarViewModel: ObservableObject {
   @Published var iconStyle: BarIconStyle {
     didSet { MenuBarIcon.saveStyle(iconStyle) }
   }
+  /// User-selected dropdown theme (System / Light / Dark). Global chrome, not an
+  /// alert pref, so it persists on its own key and bypasses the draft/writeThrough
+  /// path. Being @Published makes the MenuBarExtra re-render `ThemedRoot` the
+  /// instant it changes, giving a live theme switch.
+  @Published var appearance: BarAppearance {
+    didSet { BarAppearanceStore.save(appearance) }
+  }
   /// Which figure leads the always-on title. Persisted; a change re-derives
   /// `statusTitle` live because it is @Published.
   @Published var glanceMode: BarGlanceMode
@@ -42,6 +49,7 @@ final class BarViewModel: ObservableObject {
     // Default to the real UN-backed notifier; tests inject a recording one.
     self.notifier = notifier ?? BarNotifier()
     self.iconStyle = MenuBarIcon.loadStyle()
+    self.appearance = BarAppearanceStore.load()
     self.glanceMode = prefs.load().glanceMode
     reconnect()
   }
