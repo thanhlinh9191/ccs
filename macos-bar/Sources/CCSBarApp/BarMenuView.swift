@@ -208,11 +208,11 @@ struct BarMenuView: View {
         viewModel.toggleIconStyle()
       } label: {
         Label(
-          viewModel.iconStyle == .color ? "Color" : "Mono",
+          "Icon",
           systemImage: viewModel.iconStyle == .color ? "paintpalette" : "circle.lefthalf.filled"
         )
       }
-      .help("Toggle the menu-bar icon between color and monochrome")
+      .help("Toggle the menu-bar icon between color and monochrome (does not change the bar theme)")
       Button {
         showingPrefs = true
       } label: {
@@ -240,9 +240,8 @@ struct BarMenuView: View {
   }
 
   private func openDashboard() {
-    if case .success(let discovery) = BarDiscovery.load(), let url = discovery.resolvedURL {
-      NSWorkspace.shared.open(url)
-    }
+    // Open the dashboard if the server is up; otherwise start it via `ccs config`.
+    Task { await DashboardLauncher.openOrStart() }
   }
 }
 
@@ -510,12 +509,19 @@ struct Chip: View {
     self.text = text
     self.tint = tint
   }
+  /// Lift the tint toward white so the small 9pt label stays legible on the dark
+  /// surface — the raw tint (e.g. the indigo subscription color) was too dim to read.
+  private var textColor: Color {
+    if tint == .secondary { return .secondary }
+    let lifted = NSColor(tint).blended(withFraction: 0.5, of: .white) ?? NSColor(tint)
+    return Color(nsColor: lifted)
+  }
   var body: some View {
     Text(text)
-      .font(.system(size: 9, weight: .semibold))
+      .font(.system(size: 9.5, weight: .semibold))
       .padding(.horizontal, 5)
-      .padding(.vertical, 1)
-      .background(tint.opacity(0.16), in: Capsule())
-      .foregroundStyle(tint == .secondary ? Color.secondary : tint)
+      .padding(.vertical, 1.5)
+      .background(tint.opacity(0.22), in: Capsule())
+      .foregroundStyle(textColor)
   }
 }
