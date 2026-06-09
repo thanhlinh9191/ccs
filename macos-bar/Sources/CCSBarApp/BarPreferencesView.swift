@@ -77,16 +77,19 @@ struct BarPreferencesView: View {
     }
   }
 
+  /// Pay-per-use spend caps. Opt-in (OFF by default) and labelled for pool
+  /// accounts, NOT subscriptions: flat-rate subscription plans have no spend to
+  /// cap, so these alerts only make sense for metered pool usage.
   private var spendSection: some View {
-    Section("Spend") {
-      Toggle("Alert on daily spend", isOn: $draft.dailySpendEnabled)
+    Section("Opt-in · pay-per-use spend") {
+      Toggle("Daily spend cap (pool accounts)", isOn: $draft.dailySpendEnabled)
         .onChange(of: draft.dailySpendEnabled) { _ in writeThrough() }
       capRow(label: "Daily cap", value: $draft.dailyCapUSD, enabled: draft.dailySpendEnabled)
 
-      Toggle("Alert on monthly spend", isOn: $draft.monthSpendEnabled)
+      Toggle("Monthly spend cap (pool accounts)", isOn: $draft.monthSpendEnabled)
         .onChange(of: draft.monthSpendEnabled) { _ in writeThrough() }
       capRow(label: "Month cap", value: $draft.monthCapUSD, enabled: draft.monthSpendEnabled)
-      Text("Monthly cap measures calendar month-to-date, so it resets at the start of each billing month.")
+      Text("Subscriptions are flat-rate and unaffected. These caps only watch metered pay-per-use pool spend, and are off until you enable them.")
         .font(.caption2)
         .foregroundStyle(.secondary)
     }

@@ -20,8 +20,17 @@ struct BarPreferences {
 
   /// Seed the registration domain so missing keys resolve to their real defaults
   /// rather than the type-zero value. Idempotent — safe to call on every launch.
+  ///
+  /// The two pay-per-use spend-cap alerts default to OFF (opt-in): subscriptions
+  /// are flat-rate, so a spend alert on them is meaningless, and pool spend is
+  /// informational context, never a default-on alert. Quota / reauth / cooldown
+  /// stay default-on (the quota-first alert set). The caps themselves keep Core's
+  /// sane values so a user who opts in starts with $500 / $10000.
   func registerDefaults() {
-    defaults.register(defaults: BarAlertPrefsStore.registrationDefaults)
+    var d = BarAlertPrefsStore.registrationDefaults
+    d[BarAlertPrefsStore.Key.dailyEnabled] = false
+    d[BarAlertPrefsStore.Key.monthEnabled] = false
+    defaults.register(defaults: d)
   }
 
   /// Read the current preferences. Pulls each key into a plain dictionary and

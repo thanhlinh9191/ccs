@@ -50,4 +50,151 @@ public enum BarQuotaGauge {
     if hours > 0 { return "resets in \(hours)h \(minutes)m" }
     return "resets in \(minutes)m"
   }
+
+  // MARK: Burn-rate projection (single-window, no history)
+
+  /// Project minutes-to-exhaustion for ONE quota window from a single snapshot.
+  ///
+  /// Linear model, no smoothing, no cross-window inference: a window of length
+  /// `windowMinutes` that resets at `resetAt` started at `resetAt - windowMinutes`
+  /// and has been running `elapsed = windowMinutes - max(0, (resetAt - now)/60)`
+  /// minutes. The window's OWN average burn rate is `usedPercent / elapsed`
+  /// (%/min); minutes left to hit 100% is `(100 - usedPercent) / rate`, which
+  /// simplifies to `(100 - usedPercent) * elapsed / usedPercent`.
+  ///
+  /// Returns:
+  ///   - nil when any input is unknown (windowMinutes/resetAt nil, elapsed <= 0):
+  ///     the caller OMITS the pace clause rather than guessing.
+  ///   - nil when usage is near-zero (<= ~1%): burn is negligible, the caller
+  ///     renders "plenty at this pace" instead of an absurdly large projection.
+  ///   - 0 when already exhausted (usedPercent >= 100): "limit reached".
+  ///   - otherwise the projected whole minutes remaining at the current pace.
+  public static func burnMinutesRemaining(
+    usedPercent: Double, resetAt: Date?, windowMinutes: Int?, now: Date
+  ) -> Int? {
+    guard let windowMinutes, let resetAt else { return nil }
+    let minutesToReset = resetAt.timeIntervalSince(now) / 60
+    let elapsed = Double(windowMinutes) - max(0, minutesToReset)
+    guard elapsed > 0 else { return nil }
+    if usedPercent >= 100 { return 0 }
+    // Near-zero burn would project an effectively infinite runway; treat it as
+    // "plenty" (nil) so the phrasing layer can say so honestly.
+    guard usedPercent > 1.0 else { return nil }
+    let remaining = (100 - usedPercent) * elapsed / usedPercent
+    return Int(remaining)
+  }
+
+  /// Pick the BINDING window: the one a subscription runs out of first, i.e. the
+  /// lowest `remainingPercent` (closest to empty). Ties break to the shorter
+  /// window first (5h before week), then by a stable key order so the choice is
+  /// deterministic. Opus/Sonnet windows are eligible. Returns nil for empty
+  /// input (error/reauth rows have no windows, so they get no hero gauge).
+  public static func selectBindingWindow(_ windows: [QuotaWindowDetail]) -> QuotaWindowDetail? {
+    guard !windows.isEmpty else { return nil }
+    return windows.min { a, b in
+      if a.remainingPercent != b.remainingPercent {
+        return a.remainingPercent < b.remainingPercent
+      }
+      let am = a.windowMinutes ?? Int.max
+      let bm = b.windowMinutes ?? Int.max
+      if am != bm { return am < bm }
+      return keyRank(a.key) < keyRank(b.key)
+    }
+  }
+
+  /// Stable ordering for window keys when remaining% and length tie.
+  private static func keyRank(_ key: String) -> Int {
+    switch key {
+    case "five_hour": return 0
+    case "seven_day": return 1
+    case "seven_day_opus": return 2
+    case "seven_day_sonnet": return 3
+    default: return 4
+    }
+  }
+
+  /// Trailing pace clause for a window's hero/footer line, or nil to OMIT it.
+  ///
+  /// Phrasing rules (in order):
+  ///   - exhausted (remaining <= 0) or status "rejected" → "limit reached,
+  ///     resets in <countdown>". This REPLACES the bare reset countdown.
+  ///   - lots of headroom (remaining >= 85) or near-zero usage (burn == nil) →
+  ///     "plenty at this pace".
+  ///   - a finite projection m >= 5 → "~<Hh Mm> left at this pace".
+  ///   - m < 5 → routed to the limit-reached path (never a scary "~0m").
+  ///   - unknown window (windowMinutes/resetAt nil, elapsed <= 0) → nil (omit).
+  ///   - resetAt already in the past (clock skew / stale) → nil pace; the
+  ///     countdown elsewhere shows "reset due".
+  public static func paceClause(
+    usedPercent: Double,
+    remainingPercent: Double,
+    resetAt: String?,
+    windowMinutes: Int?,
+    status: String = "ok",
+    now: Date
+  ) -> String? {
+    let resetDate = resetAt.flatMap { BarFormatting.isoDate($0) }
+
+    if remainingPercent <= 0 || status == "rejected" {
+      if let countdown = resetCountdown(nextReset: resetAt, now: now) {
+        // resetCountdown returns "resets in 3h 12m"; reuse just the duration.
+        let duration = countdown.replacingOccurrences(of: "resets in ", with: "")
+        return "limit reached, resets in \(duration)"
+      }
+      return "limit reached"
+    }
+
+    // A reset in the past means our window math is unreliable; omit the pace.
+    if let resetDate, resetDate.timeIntervalSince(now) <= 0 { return nil }
+
+    let burn = burnMinutesRemaining(
+      usedPercent: usedPercent, resetAt: resetDate, windowMinutes: windowMinutes, now: now)
+
+    if remainingPercent >= 85 || burn == nil {
+      // nil burn here is either unknown window (handled below) or near-zero use.
+      if windowMinutes == nil || resetDate == nil { return nil }
+      return "plenty at this pace"
+    }
+
+    guard let m = burn else { return nil }
+    if m < 5 {
+      // Floor: anything under 5 minutes is effectively spent; say so plainly.
+      if let countdown = resetCountdown(nextReset: resetAt, now: now) {
+        let duration = countdown.replacingOccurrences(of: "resets in ", with: "")
+        return "limit reached, resets in \(duration)"
+      }
+      return "limit reached"
+    }
+    return "~\(compactDuration(minutes: m)) left at this pace"
+  }
+
+  /// Compact "Hh Mm" / "Mm" duration for pace phrasing (e.g. "2h 5m", "35m").
+  static func compactDuration(minutes: Int) -> String {
+    let h = minutes / 60
+    let m = minutes % 60
+    if h > 0 { return "\(h)h \(m)m" }
+    return "\(m)m"
+  }
+
+  /// Header "most room" leader: among subscription rows that have a binding
+  /// window, the one whose BINDING window has the HIGHEST remaining%. Rows with
+  /// no binding window (error/reauth) are excluded. Tie-breaks alphabetically by
+  /// display name (falling back to provider). Returns nil with fewer than two
+  /// eligible subscriptions (the header is suppressed below that).
+  public static func headroomLeader(_ rows: [BarSummaryRow]) -> (label: String, remainingPercent: Double)? {
+    let eligible: [(label: String, remaining: Double)] = rows.compactMap { row in
+      guard let binding = selectBindingWindow(row.quotaWindows ?? []) else { return nil }
+      let label = row.displayName ?? row.provider
+      return (label, binding.remainingPercent)
+    }
+    guard eligible.count >= 2 else { return nil }
+    let leader = eligible.max { a, b in
+      if a.remaining != b.remaining { return a.remaining < b.remaining }
+      // Highest remaining wins; alphabetical tie-break (smaller name "wins" max
+      // only when remaining is equal, so invert the name comparison).
+      return a.label > b.label
+    }
+    guard let leader else { return nil }
+    return (leader.label, leader.remaining)
+  }
 }

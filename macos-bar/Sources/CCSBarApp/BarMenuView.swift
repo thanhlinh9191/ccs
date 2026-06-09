@@ -21,17 +21,18 @@ struct BarMenuView: View {
       if viewModel.offline {
         offlineState.padding(14)
       } else {
-        // Scrollbar is hidden: the panel chrome already constrains height and a
-        // visible scrollbar track adds visual clutter in an always-on-screen widget.
-        // Overflow is still fully scrollable — the indicator is just not shown.
+        // The scroll indicator is suppressed (.never, not just .hidden) AND the
+        // enclosing NSScrollView's scroller is hard-disabled via ScrollerHider:
+        // inside a MenuBarExtra popover the SwiftUI preference alone is sometimes
+        // ignored and a scroller track steals width + misaligns content. With the
+        // reorder + collapsed spend strip the important rows fit without scrolling
+        // for the common 1-4 subscription setup; the scroll only engages for
+        // genuine pool/model overflow.
         ScrollView {
-          VStack(alignment: .leading, spacing: 10) {
-            if let analytics = viewModel.analytics {
-              BarAnalyticsView(analytics: analytics)
-            }
-
-            // In-dropdown alert list: surfaces the conditions the engine flagged
-            // this poll so users who deny system notifications still see them.
+          VStack(alignment: .leading, spacing: 8) {
+            // (1) ALERTS first — urgent quota crossings surface above everything.
+            // Spend-cap alerts are opt-in OFF by default, so by default only
+            // quota/reauth/cooldown conditions appear here.
             if !viewModel.activeAlerts.isEmpty {
               VStack(alignment: .leading, spacing: 6) {
                 SectionLabel("Alerts")
@@ -41,14 +42,35 @@ struct BarMenuView: View {
               }
             }
 
+            // (2) SUBSCRIPTIONS — the dominant section, opens here.
             accountsSection
+
+            // (3) SPEND — demoted to a thin informational strip below the cockpit.
+            if let analytics = viewModel.analytics {
+              Divider()
+              BarAnalyticsView(analytics: analytics, section: .spend)
+            }
+
+            // (4) POOL ACCOUNTS — compact generic rows, subordinate.
+            poolSection
+
+            // (5) BY-SURFACE / TOP MODELS — tightened detail, below the pool.
+            if let analytics = viewModel.analytics,
+              BarAnalyticsView(analytics: analytics, section: .breakdown).hasBreakdown
+            {
+              BarAnalyticsView(analytics: analytics, section: .breakdown)
+            }
+
+            // Zero-size AppKit bridge that disables the popover's NSScrollView
+            // scroller at runtime (belt-and-suspenders with .scrollIndicators).
+            ScrollerHider().frame(width: 0, height: 0)
           }
           .padding(12)
         }
-        .scrollIndicators(.hidden)
-        // 580 gives room for the full layout (2×2 grid + sparkline + surface section
-        // + top models + accounts) without wasted whitespace on a typical 1-4 account
-        // setup. The scroll still triggers gracefully when content overflows.
+        .scrollIndicators(.never)
+        // 580 fits the full reordered layout (subscription cards + spend strip +
+        // pool rows + surface/models) without wasted whitespace for a typical
+        // 1-4 account setup. Scroll engages gracefully only on real overflow.
         .frame(maxHeight: 580)
       }
 
@@ -62,11 +84,12 @@ struct BarMenuView: View {
     }
   }
 
-  /// Accounts list. Native first-party subscriptions (Claude Code / Codex) render
-  /// in a top "Subscriptions" group so the user's own plan quota reads apart from
-  /// the rotating CLIProxy "Pool accounts". The split is suppressed when there are
-  /// no subscriptions (or no pool), so the established single "Accounts" header is
-  /// kept for the common CLIProxy-only setup.
+  /// The cockpit. Native subscriptions (Claude Code / Codex) render as detailed
+  /// `BarSubscriptionCard`s at the very top, ordered tightest-binding-first
+  /// (closest to empty on top) so the window the user is about to run out of
+  /// leads. CLIProxy pool accounts keep the compact generic `BarRowView` below,
+  /// subordinate. The two-section split is suppressed when only one kind is
+  /// present, preserving the single "Accounts" header for a CLIProxy-only setup.
   @ViewBuilder private var accountsSection: some View {
     let parts = BarFormatting.partitionSubscriptions(viewModel.rows)
     VStack(alignment: .leading, spacing: 6) {
@@ -78,21 +101,70 @@ struct BarMenuView: View {
         Text("No accounts configured")
           .font(.caption)
           .foregroundStyle(.secondary)
-      } else if parts.subscriptions.isEmpty || parts.pool.isEmpty {
-        // Only one kind present: keep the single established header.
+      } else if parts.subscriptions.isEmpty {
+        // CLIProxy-only setup: keep the single established header + generic rows.
         SectionLabel("Accounts")
-        ForEach(viewModel.rows) { row in
+        ForEach(parts.pool) { row in
           BarRowView(row: row, viewModel: viewModel)
         }
       } else {
-        SectionLabel("Subscriptions")
-        ForEach(parts.subscriptions) { row in
-          BarRowView(row: row, viewModel: viewModel)
+        subscriptionsHeader(parts.subscriptions)
+        ForEach(orderedSubscriptions(parts.subscriptions)) { row in
+          BarSubscriptionCard(row: row)
         }
+      }
+    }
+  }
+
+  /// CLIProxy pool accounts as compact generic rows — subordinate, rendered below
+  /// the spend strip. Suppressed entirely when there are no pool accounts, or
+  /// when there are no subscriptions (the CLIProxy-only path renders pool rows
+  /// under the single "Accounts" header in `accountsSection` instead).
+  @ViewBuilder private var poolSection: some View {
+    let parts = BarFormatting.partitionSubscriptions(viewModel.rows)
+    if !parts.subscriptions.isEmpty && !parts.pool.isEmpty {
+      VStack(alignment: .leading, spacing: 6) {
         SectionLabel("Pool accounts")
         ForEach(parts.pool) { row in
           BarRowView(row: row, viewModel: viewModel)
         }
+      }
+    }
+  }
+
+  /// "SUBSCRIPTIONS" header, with a right-aligned cross-tool headroom hint
+  /// ("most room: <X> NN%") when there are >=2 subscriptions with quota data.
+  /// Falls back to the bare label otherwise.
+  @ViewBuilder private func subscriptionsHeader(_ subs: [BarSummaryRow]) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      SectionLabel("Subscriptions")
+      Spacer()
+      if let leader = BarQuotaGauge.headroomLeader(subs) {
+        Text("most room: \(leader.label) \(Int(leader.remainingPercent.rounded()))%")
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+  }
+
+  /// Order subscription cards by tightest binding window ascending (closest to
+  /// empty on top). Rows with no binding window (error/reauth) sink to the bottom
+  /// so the actionable quota always leads.
+  private func orderedSubscriptions(_ subs: [BarSummaryRow]) -> [BarSummaryRow] {
+    subs.sorted { a, b in
+      let ra = BarQuotaGauge.selectBindingWindow(a.quotaWindows ?? [])?.remainingPercent
+      let rb = BarQuotaGauge.selectBindingWindow(b.quotaWindows ?? [])?.remainingPercent
+      switch (ra, rb) {
+      case let (.some(x), .some(y)):
+        if x != y { return x < y }
+        return (a.displayName ?? a.provider) < (b.displayName ?? b.provider)
+      case (.some, .none):
+        return true  // a has quota, b doesn't → a first
+      case (.none, .some):
+        return false
+      case (.none, .none):
+        return (a.displayName ?? a.provider) < (b.displayName ?? b.provider)
       }
     }
   }

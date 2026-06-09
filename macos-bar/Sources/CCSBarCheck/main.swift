@@ -924,6 +924,260 @@ do {
   check(parts.pool.count == 2, "native: pool-only list keeps all rows in pool group")
 }
 
+// MARK: Per-window quota detail decode (resilient, backward compatible)
+
+do {
+  let nativeJSON = """
+    [
+      {
+        "account_id": "claude-code",
+        "provider": "claude-code",
+        "displayName": "Claude Code",
+        "tier": "max",
+        "paused": false,
+        "quota_percentage": 44,
+        "quotaStatus": "ok",
+        "next_reset": "2026-06-09T20:00:00.000Z",
+        "is_default": false,
+        "last_activity_at": null,
+        "today_cost": null,
+        "health": "ok",
+        "cached": false,
+        "fetchedAt": "2026-06-09T14:00:00.000Z",
+        "needsReauth": false,
+        "quota_windows": [
+          { "key": "five_hour", "label": "5h", "usedPercent": 56, "remainingPercent": 44, "resetAt": "2026-06-09T20:00:00.000Z", "windowMinutes": 300 },
+          { "key": "seven_day", "label": "week", "usedPercent": 30, "remainingPercent": 70, "resetAt": "2026-06-15T00:00:00.000Z", "windowMinutes": 10080 },
+          { "key": "seven_day_opus", "label": "Opus · week", "usedPercent": 25, "remainingPercent": 75, "resetAt": "2026-06-15T00:00:00.000Z", "windowMinutes": 10080 },
+          { "key": "seven_day_sonnet", "label": "Sonnet · week", "usedPercent": 60, "remainingPercent": 40, "resetAt": "2026-06-15T00:00:00.000Z", "windowMinutes": 10080 }
+        ]
+      },
+      {
+        "account_id": "codex",
+        "provider": "codex",
+        "displayName": "Codex",
+        "tier": "pro",
+        "paused": false,
+        "quota_percentage": 70,
+        "quotaStatus": "ok",
+        "next_reset": "2026-06-09T19:00:00.000Z",
+        "is_default": false,
+        "last_activity_at": null,
+        "today_cost": null,
+        "health": "warning",
+        "cached": false,
+        "fetchedAt": "2026-06-09T14:00:00.000Z",
+        "needsReauth": false,
+        "quota_windows": [
+          { "key": "five_hour", "label": "5h", "usedPercent": 19, "remainingPercent": 81, "resetAt": "2026-06-09T19:00:00.000Z", "windowMinutes": 300 }
+        ],
+        "stale_as_of": "2026-06-06T11:00:00.000Z"
+      }
+    ]
+    """
+  do {
+    let rows = try JSONDecoder().decode([BarSummaryRow].self, from: Data(nativeJSON.utf8))
+    check(rows.count == 2, "qw: decodes two native rows")
+    let claude = rows[0]
+    check(claude.quotaWindows?.count == 4, "qw: claude decodes 4 windows")
+    check(claude.quotaWindows?[0].key == "five_hour", "qw: first window key five_hour")
+    check(claude.quotaWindows?[0].label == "5h", "qw: first window label 5h")
+    check(claude.quotaWindows?[0].usedPercent == 56, "qw: usedPercent decodes")
+    check(claude.quotaWindows?[0].remainingPercent == 44, "qw: remainingPercent decodes")
+    check(claude.quotaWindows?[0].windowMinutes == 300, "qw: windowMinutes 300 decodes")
+    check(
+      claude.quotaWindows?[0].resetAt == "2026-06-09T20:00:00.000Z", "qw: resetAt decodes (ISO)")
+    check(
+      claude.quotaWindows?[2].key == "seven_day_opus", "qw: opus window present (Max)")
+    check(
+      claude.quotaWindows?[3].key == "seven_day_sonnet", "qw: sonnet window present (Max)")
+    check(claude.staleAsOf == nil, "qw: claude (fresh) has nil staleAsOf")
+    check(claude.quotaWindows?[0].id == "five_hour", "qw: window id is its key")
+
+    let codex = rows[1]
+    check(codex.quotaWindows?.count == 1, "qw: codex decodes 1 window")
+    check(codex.staleAsOf == "2026-06-06T11:00:00.000Z", "qw: codex staleAsOf decodes (stale)")
+  } catch {
+    check(false, "qw: native decode failed: \(error)")
+  }
+}
+
+// Legacy payload WITHOUT the two native-only keys still decodes (quotaWindows
+// and staleAsOf -> nil). This is the backward-compatibility guarantee.
+do {
+  let legacyJSON = """
+    [
+      {
+        "account_id": "alice@example.com",
+        "provider": "agy",
+        "displayName": "Alice",
+        "tier": "ultra",
+        "paused": false,
+        "quota_percentage": 80,
+        "quotaStatus": "ok",
+        "next_reset": null,
+        "is_default": true,
+        "last_activity_at": null,
+        "today_cost": null,
+        "health": "ok",
+        "cached": true,
+        "fetchedAt": "2026-06-07T19:00:00Z",
+        "needsReauth": false
+      }
+    ]
+    """
+  do {
+    let rows = try JSONDecoder().decode([BarSummaryRow].self, from: Data(legacyJSON.utf8))
+    check(rows.count == 1, "qw-legacy: legacy row decodes")
+    check(rows[0].quotaWindows == nil, "qw-legacy: missing quota_windows -> nil")
+    check(rows[0].staleAsOf == nil, "qw-legacy: missing stale_as_of -> nil")
+  } catch {
+    check(false, "qw-legacy: legacy decode failed: \(error)")
+  }
+}
+
+// MARK: burnMinutesRemaining (linear single-window projection)
+
+do {
+  // Mid-window pace: a 300-min window resets in 150 min -> elapsed = 150 min.
+  // usedPercent = 50 -> rate = 50/150 = 1/3 %/min -> remaining 50% / (1/3) = 150.
+  let now = Date(timeIntervalSince1970: 1_700_000_000)
+  let resetIn150 = now.addingTimeInterval(150 * 60)
+  let t = BarQuotaGauge.burnMinutesRemaining(
+    usedPercent: 50, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(t == 150, "burn: mid-window 50% over 150min elapsed -> 150 min remaining")
+
+  // Near-zero usage -> nil ("plenty"); avoids an absurd projection.
+  let lowUse = BarQuotaGauge.burnMinutesRemaining(
+    usedPercent: 0.5, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(lowUse == nil, "burn: near-zero usage -> nil (plenty)")
+
+  // Exhausted -> 0 ("limit reached").
+  let exhausted = BarQuotaGauge.burnMinutesRemaining(
+    usedPercent: 100, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(exhausted == 0, "burn: usedPercent>=100 -> 0 (limit reached)")
+
+  // Unknown window length or reset -> nil (omit pace).
+  check(
+    BarQuotaGauge.burnMinutesRemaining(
+      usedPercent: 50, resetAt: resetIn150, windowMinutes: nil, now: now) == nil,
+    "burn: nil windowMinutes -> nil")
+  check(
+    BarQuotaGauge.burnMinutesRemaining(
+      usedPercent: 50, resetAt: nil, windowMinutes: 300, now: now) == nil,
+    "burn: nil resetAt -> nil")
+
+  // elapsed <= 0 (reset already further out than the full window) -> nil.
+  let resetTooFar = now.addingTimeInterval(400 * 60)
+  check(
+    BarQuotaGauge.burnMinutesRemaining(
+      usedPercent: 50, resetAt: resetTooFar, windowMinutes: 300, now: now) == nil,
+    "burn: elapsed<=0 -> nil")
+}
+
+// MARK: selectBindingWindow
+
+do {
+  let now = Date(timeIntervalSince1970: 1_700_000_000)
+  _ = now
+  let fiveHour = QuotaWindowDetail(
+    key: "five_hour", label: "5h", usedPercent: 56, remainingPercent: 44, windowMinutes: 300)
+  let week = QuotaWindowDetail(
+    key: "seven_day", label: "week", usedPercent: 30, remainingPercent: 70, windowMinutes: 10080)
+  let opus = QuotaWindowDetail(
+    key: "seven_day_opus", label: "Opus · week", usedPercent: 75, remainingPercent: 25,
+    windowMinutes: 10080)
+
+  let binding = BarQuotaGauge.selectBindingWindow([fiveHour, week, opus])
+  check(binding?.key == "seven_day_opus", "binding: lowest remaining (opus 25%) wins")
+
+  // Tie on remaining% -> shorter window first.
+  let weekTie = QuotaWindowDetail(
+    key: "seven_day", label: "week", usedPercent: 60, remainingPercent: 40, windowMinutes: 10080)
+  let fiveTie = QuotaWindowDetail(
+    key: "five_hour", label: "5h", usedPercent: 60, remainingPercent: 40, windowMinutes: 300)
+  let tieBinding = BarQuotaGauge.selectBindingWindow([weekTie, fiveTie])
+  check(tieBinding?.key == "five_hour", "binding: remaining tie -> shorter window (5h) wins")
+
+  check(BarQuotaGauge.selectBindingWindow([]) == nil, "binding: empty input -> nil")
+}
+
+// MARK: paceClause phrasing
+
+do {
+  let now = Date(timeIntervalSince1970: 1_700_000_000)
+  let resetIn150 = ISO8601DateFormatter().string(from: now.addingTimeInterval(150 * 60))
+
+  // Finite projection -> "~Hh Mm left at this pace".
+  let finite = BarQuotaGauge.paceClause(
+    usedPercent: 50, remainingPercent: 50, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(finite == "~2h 30m left at this pace", "pace: finite -> '~2h 30m left at this pace'")
+
+  // Lots of headroom -> "plenty at this pace".
+  let plenty = BarQuotaGauge.paceClause(
+    usedPercent: 10, remainingPercent: 90, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(plenty == "plenty at this pace", "pace: >=85% remaining -> 'plenty at this pace'")
+
+  // Near-zero usage -> "plenty at this pace" (burn nil but window known).
+  let plentyLow = BarQuotaGauge.paceClause(
+    usedPercent: 0.5, remainingPercent: 99.5, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(plentyLow == "plenty at this pace", "pace: near-zero usage -> 'plenty at this pace'")
+
+  // Exhausted -> "limit reached, resets in ...".
+  let reached = BarQuotaGauge.paceClause(
+    usedPercent: 100, remainingPercent: 0, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(
+    reached?.hasPrefix("limit reached, resets in") == true,
+    "pace: 0% remaining -> 'limit reached, resets in ...'")
+
+  // < 5 min floor -> limit-reached path, never a scary "~0m".
+  // usedPercent 99 over 150min elapsed -> ~1.5 min remaining (<5).
+  let nearFloor = BarQuotaGauge.paceClause(
+    usedPercent: 99, remainingPercent: 1, resetAt: resetIn150, windowMinutes: 300, now: now)
+  check(
+    nearFloor?.hasPrefix("limit reached") == true && !(nearFloor?.contains("~0m") ?? true),
+    "pace: <5m floor -> limit-reached, never '~0m'")
+
+  // Unknown window -> nil (omit).
+  let unknown = BarQuotaGauge.paceClause(
+    usedPercent: 50, remainingPercent: 50, resetAt: nil, windowMinutes: nil, now: now)
+  check(unknown == nil, "pace: unknown window -> nil (omit)")
+
+  // resetAt in the past -> nil pace.
+  let pastReset = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+  let past = BarQuotaGauge.paceClause(
+    usedPercent: 50, remainingPercent: 50, resetAt: pastReset, windowMinutes: 300, now: now)
+  check(past == nil, "pace: past resetAt -> nil pace")
+}
+
+// MARK: headroomLeader
+
+do {
+  func subRow(_ provider: String, _ name: String, remaining: Double) -> BarSummaryRow {
+    BarSummaryRow(
+      accountId: provider, provider: provider, displayName: name, quotaStatus: "ok",
+      quotaWindows: [
+        QuotaWindowDetail(
+          key: "five_hour", label: "5h", usedPercent: 100 - remaining,
+          remainingPercent: remaining, windowMinutes: 300)
+      ])
+  }
+  let claude = subRow("claude-code", "Claude Code", remaining: 44)
+  let codex = subRow("codex", "Codex", remaining: 81)
+  let errorRow = BarSummaryRow(
+    accountId: "broken", provider: "claude-code", displayName: "Broken", quotaStatus: "error")
+
+  let leader = BarQuotaGauge.headroomLeader([claude, codex, errorRow])
+  check(leader?.label == "Codex", "headroom: highest-binding-remaining (Codex 81%) leads")
+  check(leader?.remainingPercent == 81, "headroom: leader carries its remaining%")
+
+  // Error/reauth rows (no binding window) are excluded from the count.
+  let single = BarQuotaGauge.headroomLeader([claude, errorRow])
+  check(single == nil, "headroom: <2 eligible subscriptions -> nil")
+
+  check(BarQuotaGauge.headroomLeader([]) == nil, "headroom: empty -> nil")
+}
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 
