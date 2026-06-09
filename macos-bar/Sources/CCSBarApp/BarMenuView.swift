@@ -16,14 +16,20 @@ struct BarMenuView: View {
       if viewModel.offline {
         offlineState.padding(14)
       } else {
+        // Scrollbar is hidden: the panel chrome already constrains height and a
+        // visible scrollbar track adds visual clutter in an always-on-screen widget.
+        // Overflow is still fully scrollable — the indicator is just not shown.
         ScrollView {
-          VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: 10) {
             if let analytics = viewModel.analytics {
               BarAnalyticsView(analytics: analytics)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
               SectionLabel("Accounts")
+              if let error = viewModel.lastError {
+                ErrorBanner(message: error)
+              }
               if viewModel.rows.isEmpty {
                 Text("No accounts configured")
                   .font(.caption)
@@ -35,9 +41,13 @@ struct BarMenuView: View {
               }
             }
           }
-          .padding(14)
+          .padding(12)
         }
-        .frame(maxHeight: 520)
+        .scrollIndicators(.hidden)
+        // 580 gives room for the full layout (2×2 grid + sparkline + surface section
+        // + top models + accounts) without wasted whitespace on a typical 1-4 account
+        // setup. The scroll still triggers gracefully when content overflows.
+        .frame(maxHeight: 580)
       }
 
       Divider()
@@ -118,17 +128,23 @@ struct BarMenuView: View {
   }
 }
 
-/// One account row: colored health dot, name, a chip subline, today's cost, and
-/// a control menu.
+/// One account row — the strongest section of the glance.
+///
+/// Top line: health dot, name, default/paused/reauth badges. Subline: provider +
+/// tier chips, the honest tri-state quota label (NN% / "no quota" / "quota ?"),
+/// and a per-account "Last active <date>" caption. Trailing: today's cost (or a
+/// muted "no data" when unknown vs a real "$0.00"), a visible pause/resume
+/// toggle, and the overflow menu (set-default / solo / tier-lock).
 struct BarRowView: View {
   let row: BarSummaryRow
   @ObservedObject var viewModel: BarViewModel
 
   var body: some View {
-    HStack(alignment: .center, spacing: 9) {
+    HStack(alignment: .top, spacing: 9) {
       Circle()
         .fill(healthColor)
         .frame(width: 8, height: 8)
+        .padding(.top, 5)
 
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
@@ -136,6 +152,9 @@ struct BarRowView: View {
             .font(.system(.body, design: .default).weight(.medium))
             .lineLimit(1)
             .truncationMode(.middle)
+          if row.isDefault {
+            Chip("default", tint: BarTheme.accent)
+          }
           if row.paused {
             Chip("paused", tint: .secondary)
           }
@@ -146,52 +165,114 @@ struct BarRowView: View {
         HStack(spacing: 6) {
           Chip(row.provider, tint: BarTheme.accent)
           if let tier = row.tier { Chip(tier, tint: .secondary) }
-          Text(BarFormatting.quotaLabel(row.quotaPercentage))
+          Text(BarFormatting.quotaLabel(percentage: row.quotaPercentage, status: row.quotaStatus))
+            .font(.caption2)
+            .foregroundStyle(quotaColor)
+        }
+        if let lastActive = BarFormatting.lastActiveLabel(
+          iso: row.lastActivityAt, daysSince: nil)
+        {
+          Text(lastActive)
             .font(.caption2)
             .foregroundStyle(.secondary)
         }
       }
 
-      Spacer()
+      Spacer(minLength: 4)
 
-      let cost = BarFormatting.costLabel(row.todayCost)
-      if !cost.isEmpty {
-        Text(cost)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
-      }
-
-      Menu {
-        if row.paused {
-          Button("Resume") { viewModel.resume(row) }
-        } else {
-          Button("Pause") { viewModel.pause(row) }
+      VStack(alignment: .trailing, spacing: 3) {
+        costView
+        HStack(spacing: 2) {
+          pauseToggle
+          overflowMenu
         }
-        Button("Set as default") { viewModel.setDefault(row) }
-        Button("Solo (pause others)") { viewModel.solo(row) }
-        Divider()
-        if let tier = row.tier {
-          Button("Lock to \(tier)") { viewModel.tierLock(row, tier: tier) }
-        }
-        Button("Clear tier lock") { viewModel.tierLock(row, tier: nil) }
-      } label: {
-        Image(systemName: "ellipsis.circle")
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .frame(width: 28)
     }
-    .padding(.vertical, 5)
+    .padding(.vertical, 6)
     .padding(.horizontal, 8)
     .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
   }
 
+  /// Today's cost: a real "$x.xx" when known (including a genuine $0.00), a muted
+  /// "no data" when the value is null (no usage record on a possibly-stale snapshot).
+  @ViewBuilder private var costView: some View {
+    if let cost = row.todayCost {
+      Text(BarFormatting.money(cost))
+        .font(.system(.caption, design: .monospaced))
+        .foregroundStyle(.secondary)
+    } else {
+      Text("no data")
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+    }
+  }
+
+  /// Visible primary action: one tap to pause or resume the account.
+  private var pauseToggle: some View {
+    Button {
+      if row.paused { viewModel.resume(row) } else { viewModel.pause(row) }
+    } label: {
+      Image(systemName: row.paused ? "play.circle" : "pause.circle")
+    }
+    .buttonStyle(.borderless)
+    .help(row.paused ? "Resume account" : "Pause account")
+  }
+
+  private var overflowMenu: some View {
+    Menu {
+      Button("Set as default") { viewModel.setDefault(row) }
+      Button("Solo (pause others)") { viewModel.solo(row) }
+      Divider()
+      if let tier = row.tier {
+        Button("Lock to \(tier)") { viewModel.tierLock(row, tier: tier) }
+      }
+      Button("Clear tier lock") { viewModel.tierLock(row, tier: nil) }
+    } label: {
+      Image(systemName: "ellipsis.circle")
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .frame(width: 24)
+  }
+
+  /// Health dot. With the corrected backend, "unsupported" providers (ghcp/kiro)
+  /// arrive as health "ok" (green) — no permanent orange dot. Orange is reserved
+  /// for genuine transient fetch failures, red for accounts needing reauth.
   private var healthColor: Color {
     switch row.health {
     case "error": return .red
     case "warning": return .orange
     default: return .green
     }
+  }
+
+  /// Quota label color: muted for "no quota", warning-tinted for "quota ?".
+  private var quotaColor: Color {
+    switch row.quotaStatus {
+    case "unsupported": return .secondary
+    case "error": return .orange
+    default: return .secondary
+    }
+  }
+}
+
+/// Inline banner surfacing the last failed action so it is visible rather than
+/// silently swallowed. Success is confirmed by the default/paused badge updating.
+struct ErrorBanner: View {
+  let message: String
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.orange)
+      Text(message)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+    }
+    .padding(.vertical, 5)
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
   }
 }
 

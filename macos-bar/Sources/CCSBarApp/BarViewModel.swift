@@ -33,7 +33,7 @@ final class BarViewModel: ObservableObject {
 
   /// Compact status-bar title.
   var statusTitle: String {
-    offline ? "CCS offline" : BarFormatting.statusTitle(rows: rows)
+    offline ? "CCS offline" : BarFormatting.statusTitle(rows: rows, analytics: analytics)
   }
 
   /// Resolve the discovery file and (re)build the client. Marks offline when

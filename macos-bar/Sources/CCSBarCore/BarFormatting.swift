@@ -3,9 +3,30 @@ import Foundation
 /// Pure formatting helpers for the status-bar title and dropdown rows.
 /// No SwiftUI dependency so they are unit-testable on any toolchain.
 public enum BarFormatting {
-  /// Quota percentage label, e.g. "82%" or "--" when unknown.
-  public static func quotaLabel(_ pct: Double?) -> String {
-    guard let pct else { return "--" }
+  /// Tri-state quota label. Honest about WHY a percentage is missing instead of
+  /// collapsing every case to a bare "--":
+  ///   status "ok"          + pct → "NN%"     (threshold-colored upstream)
+  ///   status "unsupported"       → "no quota" (provider has no quota API)
+  ///   status "error"             → "quota ?"  (transient fetch failure)
+  /// An "ok" status with a nil percentage (shouldn't happen, but be safe) also
+  /// degrades to "quota ?" rather than "--".
+  public static func quotaLabel(percentage pct: Double?, status: String) -> String {
+    switch status {
+    case "ok":
+      guard let pct else { return "quota ?" }
+      return "\(Int(pct.rounded()))%"
+    case "unsupported":
+      return "no quota"
+    default:
+      return "quota ?"
+    }
+  }
+
+  /// Quota title token: only an "ok" row with a real percentage yields a token
+  /// (so "unsupported"/"error" rows can never produce "--" in the menu-bar
+  /// title and the fallback chain falls through instead). Returns nil to skip.
+  public static func quotaTitleToken(percentage pct: Double?, status: String) -> String? {
+    guard status == "ok", let pct else { return nil }
     return "\(Int(pct.rounded()))%"
   }
 
@@ -31,31 +52,81 @@ public enum BarFormatting {
     return "\(n)"
   }
 
-  /// Compact status-bar title. Shows the most-used (lowest remaining quota)
-  /// active account, plus today's total cost when available.
-  /// Example: "agy 82% · $3.20". Falls back to "CCS" when there are no rows.
-  public static func statusTitle(rows: [BarSummaryRow]) -> String {
-    let active = rows.filter { !$0.paused }
-    guard let lead = leadRow(active.isEmpty ? rows : active) else { return "CCS" }
-    var parts: [String] = []
-    let q = quotaLabel(lead.quotaPercentage)
-    parts.append("\(lead.provider) \(q)")
-    let total = rows.compactMap { $0.todayCost }.reduce(0, +)
-    let cost = costLabel(total)
-    if !cost.isEmpty { parts.append(cost) }
-    return parts.joined(separator: " \u{00B7} ")
+  /// Compact, always-meaningful status-bar title. Evaluates an ordered fallback
+  /// chain left to right; the first step that yields a non-empty token wins. A
+  /// bare "--" is NEVER emitted — every step degrades to the next instead.
+  ///
+  ///   1. QUOTA      — lowest remaining quota among rows whose quotaStatus=="ok"
+  ///                   with a real percentage → "<provider> NN%" (e.g. "agy 12%").
+  ///                   "unsupported"/"error" rows are skipped so they can't show "--".
+  ///   2. TODAY COST — else analytics.today.cost > 0 → "$<today>" (e.g. "$3.20").
+  ///                   Uses the fresh aggregate from analytics, not per-row today_cost.
+  ///   3. ATTENTION/COUNT — else rows needing reauth → "CCS <n>!"; else active
+  ///                   (non-paused) count → "CCS <n>", fallback to total count.
+  ///   4. "CCS"      — only when there are no rows at all.
+  ///
+  /// All-time spend is deliberately EXCLUDED from the title chain: a lifetime dollar
+  /// figure (e.g. "$40.8k") always reads as live spend in the always-on menu bar,
+  /// creating false urgency. It belongs only in the analytics section of the dropdown.
+  public static func statusTitle(rows: [BarSummaryRow], analytics: BarAnalytics?) -> String {
+    if rows.isEmpty { return "CCS" }
+
+    // (1) QUOTA — closest to exhaustion among quota-capable rows.
+    let quotaRows = rows.filter { $0.quotaStatus == "ok" && $0.quotaPercentage != nil }
+    if let lead = quotaRows.min(by: { ($0.quotaPercentage ?? 0) < ($1.quotaPercentage ?? 0) }),
+      let token = quotaTitleToken(percentage: lead.quotaPercentage, status: lead.quotaStatus)
+    {
+      return "\(lead.provider) \(token)"
+    }
+
+    // (2) TODAY COST — fresh aggregate from analytics (more accurate than summing
+    // per-row today_cost, which may have nulls or stale snapshot values).
+    if let todayCost = analytics?.today.cost, todayCost > 0 {
+      return money(todayCost)
+    }
+
+    // (3) ATTENTION / ACTIVE COUNT.
+    let reauthCount = rows.filter { $0.needsReauth }.count
+    if reauthCount > 0 {
+      return "CCS \(reauthCount)!"
+    }
+    let activeCount = rows.filter { !$0.paused }.count
+    return "CCS \(activeCount > 0 ? activeCount : rows.count)"
   }
 
-  /// The row to surface in the compact title: the one closest to exhaustion.
-  /// `quota_percentage` is REMAINING quota (higher = more left), so the lead is
-  /// the LOWEST remaining percentage. Rows without a known percentage are not
-  /// chosen unless no row has one.
-  static func leadRow(_ rows: [BarSummaryRow]) -> BarSummaryRow? {
-    let withPct = rows.filter { $0.quotaPercentage != nil }
-    if let lead = withPct.min(by: { ($0.quotaPercentage ?? 0) < ($1.quotaPercentage ?? 0) }) {
-      return lead
+  /// The "headline" account for the dropdown when no quota exists (which account
+  /// name leads). Deterministic: prefer the default row, else the sole active
+  /// row, else alphabetical by id — never `rows.first` (arbitrary order).
+  public static func leadRow(_ rows: [BarSummaryRow]) -> BarSummaryRow? {
+    if rows.isEmpty { return nil }
+    if let def = rows.first(where: { $0.isDefault }) { return def }
+    let active = rows.filter { !$0.paused }
+    if active.count == 1 { return active[0] }
+    return rows.min(by: { $0.id < $1.id })
+  }
+
+  /// Human "Last active" caption from an ISO timestamp + a precomputed day-delta.
+  /// "Last active today" / "yesterday" / "Apr 29" — never a raw ISO string.
+  public static func lastActiveLabel(iso: String?, daysSince: Int?) -> String? {
+    guard let iso, let date = isoDate(iso) else { return nil }
+    if let d = daysSince {
+      if d <= 0 { return "Last active today" }
+      if d == 1 { return "Last active yesterday" }
     }
-    return rows.first
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
+    fmt.dateFormat = "MMM d"
+    return "Last active \(fmt.string(from: date))"
+  }
+
+  /// Parse an ISO-8601 timestamp (with or without fractional seconds).
+  static func isoDate(_ iso: String) -> Date? {
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = withFraction.date(from: iso) { return d }
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    return plain.date(from: iso)
   }
 }
 
