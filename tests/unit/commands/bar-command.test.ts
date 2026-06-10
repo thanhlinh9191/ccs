@@ -2034,8 +2034,12 @@ describe('bar install: quarantine handling (GH-1504)', () => {
     expect(allOutput).toMatch(/\[OK\].*[Cc]leared.*[Qq]uarantine/);
   });
 
-  it('quarantine failure is non-fatal: falls back to printed xattr hint', async () => {
+  it('quarantine failure is non-fatal: falls back to printed xattr hint; launch handoff skipped', async () => {
+    // Launch Retry finding: when clearQuarantine fails, the entire launch handoff must be
+    // skipped (prompt and launchBar must NOT be called) and the follow-up hint must be printed.
     const appsDir = path.join(tempHome, 'Applications');
+    let launchCalled = false;
+    let promptCalled = false;
 
     const { handleBarInstall } = await loadInstallSubcommand();
 
@@ -2046,9 +2050,12 @@ describe('bar install: quarantine handling (GH-1504)', () => {
       readAppBundleVersion: () => '1.0.0',
       clearQuarantine: async () => false,
       launchBar: async () => {
-        /* noop */
+        launchCalled = true;
       },
-      promptLaunch: async () => false,
+      promptLaunch: async () => {
+        promptCalled = true;
+        return false;
+      },
       getCcsDir: () => path.join(tempHome, '.ccs'),
       getAppsDir: () => appsDir,
     });
@@ -2060,6 +2067,13 @@ describe('bar install: quarantine handling (GH-1504)', () => {
 
     // Fallback xattr hint printed
     expect(allOutput).toMatch(/xattr.*quarantine/i);
+
+    // Launch Retry finding: prompt and launch must both be skipped
+    expect(promptCalled).toBe(false);
+    expect(launchCalled).toBe(false);
+
+    // Follow-up hint must guide the user to run `ccs bar` after manual clear
+    expect(allOutput).toMatch(/After clearing quarantine.*ccs bar/i);
   });
 
   it('clearQuarantine is NOT called when extraction fails (app path absent)', async () => {
@@ -2092,6 +2106,126 @@ describe('bar install: quarantine handling (GH-1504)', () => {
     expect(quarantineCalls).toHaveLength(0);
     const allOutput = consoleOutput.join('\n');
     expect(allOutput).toMatch(/\[X\]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Launch Retry finding — quarantine failure blocks entire launch handoff
+// ---------------------------------------------------------------------------
+
+describe('bar install: launch retry finding — quarantine failure skips launch handoff', () => {
+  const FAKE_DOWNLOAD_URL =
+    'https://github.com/kaitranntt/ccs/releases/download/ccs-bar-latest/CCS-Bar.app.zip';
+
+  function fakeExtract(appsDir: string) {
+    return async (_url: string, dest: string) => {
+      fs.mkdirSync(path.join(dest, 'CCS Bar.app'), { recursive: true });
+    };
+  }
+
+  function baseDeps(appsDir: string, extra?: Partial<Record<string, unknown>>) {
+    return {
+      fetchReleaseAsset: async () => ({ downloadUrl: FAKE_DOWNLOAD_URL }),
+      downloadAndExtract: fakeExtract(appsDir),
+      verifyCompat: async () => ({ compatible: true, reason: 'ok' as const }),
+      readAppBundleVersion: () => '1.0.0',
+      isBarRunning: async () => false,
+      getCcsDir: () => path.join(tempHome, '.ccs'),
+      getAppsDir: () => appsDir,
+      ...extra,
+    };
+  }
+
+  it('clearQuarantine false: promptLaunch is NOT called', async () => {
+    const appsDir = path.join(tempHome, 'Applications');
+    let promptCalled = false;
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall([], {
+      ...baseDeps(appsDir),
+      clearQuarantine: async () => false,
+      launchBar: async () => { /* noop */ },
+      promptLaunch: async () => {
+        promptCalled = true;
+        return true;
+      },
+    });
+
+    expect(promptCalled).toBe(false);
+  });
+
+  it('clearQuarantine false + --launch: launchBar is NOT called (explicit flag cannot override failed clear)', async () => {
+    // --launch does not bypass a failed quarantine clear — Gatekeeper would still block.
+    const appsDir = path.join(tempHome, 'Applications');
+    let launchCalled = false;
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall(['--launch'], {
+      ...baseDeps(appsDir),
+      clearQuarantine: async () => false,
+      launchBar: async () => {
+        launchCalled = true;
+      },
+      promptLaunch: async () => false,
+    });
+
+    expect(launchCalled).toBe(false);
+  });
+
+  it('clearQuarantine false: follow-up hint printed directing user to run `ccs bar` after manual clear', async () => {
+    const appsDir = path.join(tempHome, 'Applications');
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall([], {
+      ...baseDeps(appsDir),
+      clearQuarantine: async () => false,
+      launchBar: async () => { /* noop */ },
+      promptLaunch: async () => false,
+    });
+
+    const allOutput = consoleOutput.join('\n');
+    expect(allOutput).toMatch(/After clearing quarantine.*ccs bar/i);
+  });
+
+  it('clearQuarantine true: launch handoff proceeds normally (prompt called)', async () => {
+    // Successful clear must not change existing behavior — prompt is still called.
+    const appsDir = path.join(tempHome, 'Applications');
+    let promptCalled = false;
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall([], {
+      ...baseDeps(appsDir),
+      clearQuarantine: async () => true,
+      launchBar: async () => { /* noop */ },
+      promptLaunch: async () => {
+        promptCalled = true;
+        return false;
+      },
+    });
+
+    expect(promptCalled).toBe(true);
+  });
+
+  it('clearQuarantine true + --launch: launchBar invoked as before', async () => {
+    const appsDir = path.join(tempHome, 'Applications');
+    let launchCalled = false;
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall(['--launch'], {
+      ...baseDeps(appsDir),
+      clearQuarantine: async () => true,
+      launchBar: async () => {
+        launchCalled = true;
+      },
+      promptLaunch: async () => false,
+    });
+
+    expect(launchCalled).toBe(true);
   });
 });
 

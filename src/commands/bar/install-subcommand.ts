@@ -553,7 +553,9 @@ export async function handleBarInstall(
 
   // 5. Quarantine handling: run `xattr -dr com.apple.quarantine` automatically.
   //    This clears the Gatekeeper quarantine flag that ad-hoc builds receive on download.
-  //    On success: print [OK] confirmation. On failure: fall back to printed guidance.
+  //    On success: print [OK] confirmation. On failure: fall back to printed guidance and
+  //    SKIP the launch handoff entirely — launching a still-quarantined app hits the
+  //    Gatekeeper block, so the user must clear quarantine manually first.
   const quarantineCleared = await clearQuarantine(appPath);
   if (quarantineCleared) {
     console.log('[OK] Cleared Gatekeeper quarantine.');
@@ -562,6 +564,8 @@ export async function handleBarInstall(
     console.log('    If macOS says the app is "damaged" or "unverified", run:');
     console.log(`      xattr -dr com.apple.quarantine "${appPath}"`);
     console.log('    Or right-click the app and select Open.');
+    console.log('[i] After clearing quarantine, run `ccs bar` to launch.');
+    return;
   }
 
   // 6. Capability handshake via GET /api/bar/summary.
