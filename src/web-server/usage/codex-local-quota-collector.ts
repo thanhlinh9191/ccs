@@ -167,17 +167,19 @@ function collectRolloutFiles(
 }
 
 /**
- * Default tail using Bun.spawn (macOS-safe: no tac, no GNU timeout).
- * Reads the last `lines` lines so we never load a huge session into memory.
+ * Default tail via a pure fs read. Must work under BOTH node and bun: the `ccs`
+ * CLI (and `ccs bar launch`) runs under node, where `Bun.spawn` is undefined —
+ * the previous Bun-only implementation threw there, so Codex quota silently
+ * never surfaced in real deployments (only under the bun-run dev harness).
+ * Reading the JSONL and slicing the tail is cheap (session rollouts are small)
+ * and carries no runtime/OS/subprocess dependency.
  */
 async function defaultTailLines(file: string, lines: number): Promise<string[]> {
-  const proc = Bun.spawn(['tail', `-${lines}`, file], {
-    stdout: 'pipe',
-    stderr: 'ignore',
-  });
-  const text = await new Response(proc.stdout).text();
-  await proc.exited;
-  return text.split('\n').filter((l) => l.trim().length > 0);
+  const text = await fs.promises.readFile(file, 'utf8');
+  return text
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .slice(-lines);
 }
 
 function computeQuotaPercentage(rate: CodexRateLimits): number {
