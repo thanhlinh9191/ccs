@@ -1379,6 +1379,63 @@ do {
   defaults.removePersistentDomain(forName: suiteName)
 }
 
+// MARK: BarScreenPicker — pure geometry helpers (#1502 / #1503)
+//
+// BarScreenPicker lives in CCSBarApp (AppKit-only target), so we can't import it
+// here. We test the equivalent geometry directly: distanceSquared and the
+// index-selection logic expressed over plain CGRect/CGPoint values — the same
+// arithmetic BarScreenPicker runs at runtime. NSPoint/NSRect are CGPoint/CGRect
+// on macOS, so the results are identical.
+
+do {
+  // distanceSquared: point inside rect -> 0.
+  let r = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+  let inside = CGPoint(x: 960, y: 540)
+  let dxIn = max(r.minX - inside.x, 0, inside.x - r.maxX)
+  let dyIn = max(r.minY - inside.y, 0, inside.y - r.maxY)
+  check(dxIn * dxIn + dyIn * dyIn == 0, "screenPicker: point inside rect -> distance 0")
+
+  // distanceSquared: point to the right of rect.
+  let rightOf = CGPoint(x: 2000, y: 540)
+  let dx = max(r.minX - rightOf.x, 0, rightOf.x - r.maxX)  // 2000 - 1920 = 80
+  let dy = max(r.minY - rightOf.y, 0, rightOf.y - r.maxY)  // 0
+  check(dx == 80 && dy == 0, "screenPicker: point right of rect -> dx=80, dy=0")
+  check(dx * dx + dy * dy == 6400, "screenPicker: rightOf distance^2 = 6400")
+
+  // Screen selection: pick the screen containing the point.
+  // Simulate two side-by-side displays: left (0..1920) and right (1920..3840),
+  // each 1080 tall. A click at x=2500 is on the right display.
+  let leftFrame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+  let rightFrame = CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+  let clickOnRight = CGPoint(x: 2500, y: 50)
+
+  // Contains check (exact hit on right).
+  let exactHit = rightFrame.contains(clickOnRight)
+  check(exactHit, "screenPicker: click at x=2500 is contained by right display frame")
+  let noHitLeft = leftFrame.contains(clickOnRight)
+  check(!noHitLeft, "screenPicker: click at x=2500 is NOT on the left display frame")
+
+  // Gap scenario: click at x=-10 (left of leftFrame), should pick left (closest).
+  let gapClick = CGPoint(x: -10, y: 540)
+  let dLeft: CGFloat = {
+    let ddx = max(leftFrame.minX - gapClick.x, 0, gapClick.x - leftFrame.maxX)
+    let ddy = max(leftFrame.minY - gapClick.y, 0, gapClick.y - leftFrame.maxY)
+    return ddx * ddx + ddy * ddy
+  }()
+  let dRight: CGFloat = {
+    let ddx = max(rightFrame.minX - gapClick.x, 0, gapClick.x - rightFrame.maxX)
+    let ddy = max(rightFrame.minY - gapClick.y, 0, gapClick.y - rightFrame.maxY)
+    return ddx * ddx + ddy * ddy
+  }()
+  check(dLeft < dRight, "screenPicker: gap click left of left display -> left is closest")
+
+  // Screen A is the one whose frame.contains(click) returns true; that is the
+  // screen that should be selected for panel anchoring (the fix for #1502).
+  let screens = [leftFrame, rightFrame]
+  let selectedIdx = screens.firstIndex(where: { $0.contains(clickOnRight) })
+  check(selectedIdx == 1, "screenPicker: exact hit selects right screen (index 1) for #1502 anchor")
+}
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 

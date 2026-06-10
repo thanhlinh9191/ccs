@@ -55,7 +55,11 @@ final class SettingsWindowController {
     window.minSize = NSSize(width: 420, height: 520)
     // Reuse the instance on reopen instead of tearing it down on close.
     window.isReleasedWhenClosed = false
-    window.center()
+    // Center on the screen that contains the mouse cursor (= the clicked screen)
+    // rather than NSScreen.main (which is the screen with the key window and may
+    // differ from the display where the menu bar icon was clicked). Falls back to
+    // the primary screen via NSWindow.center() when no match is found.
+    centerOnClickedScreen(window)
 
     let delegate = SettingsWindowDelegate(onClose: { [weak self] in self?.handleClose() })
     window.delegate = delegate
@@ -84,6 +88,31 @@ final class SettingsWindowController {
     NSApp.setActivationPolicy(.accessory)
     window = nil
     delegate = nil
+  }
+
+  /// Centers `window` on the screen that contains the mouse cursor at call-time
+  /// (i.e. the display where the user clicked the settings button). This ensures
+  /// the settings window opens on the same display as the menu bar icon that was
+  /// clicked, rather than defaulting to NSScreen.main (the primary / key-window
+  /// screen, which may be a different monitor in a multi-display setup).
+  ///
+  /// Falls back to `window.center()` (primary screen, macOS default) when no
+  /// candidate screen can be determined.
+  private func centerOnClickedScreen(_ window: NSWindow) {
+    let mouseGlobal = NSEvent.mouseLocation
+    let screens = NSScreen.screens
+    guard let target = BarScreenPicker.screen(for: mouseGlobal, in: screens) else {
+      window.center()
+      return
+    }
+    let visibleFrame = target.visibleFrame
+    let windowSize = window.frame.size
+    let x = visibleFrame.midX - windowSize.width / 2
+    let y = visibleFrame.midY - windowSize.height / 2
+    window.setFrameOrigin(NSPoint(
+      x: max(visibleFrame.minX, min(x, visibleFrame.maxX - windowSize.width)),
+      y: max(visibleFrame.minY, min(y, visibleFrame.maxY - windowSize.height))
+    ))
   }
 }
 
