@@ -110,6 +110,14 @@ export interface InstallDeps {
    * Injectable for tests — avoids touching the real process table.
    */
   isBarRunning: () => Promise<boolean>;
+  /**
+   * Remove an existing app bundle before extraction so a malformed archive
+   * cannot silently leave the old version in place.
+   * Production: fs.rmSync(appPath, { recursive: true, force: true }).
+   * Injectable for tests — avoids real filesystem side-effects.
+   * Throws on failure; caller catches and aborts install.
+   */
+  removeExistingApp: (appPath: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +394,10 @@ async function defaultClearQuarantine(appPath: string): Promise<boolean> {
   }
 }
 
+function defaultRemoveExistingApp(appPath: string): void {
+  fs.rmSync(appPath, { recursive: true, force: true });
+}
+
 async function defaultLaunchBar(args: string[]): Promise<void> {
   const { handleBarLaunch } = await import('./launch-subcommand');
   await handleBarLaunch(args);
@@ -470,6 +482,7 @@ export async function handleBarInstall(
   const launchBar = deps.launchBar ?? defaultLaunchBar;
   const promptLaunch = deps.promptLaunch ?? defaultPromptLaunch;
   const isBarRunning = deps.isBarRunning ?? defaultIsBarRunning;
+  const removeExistingApp = deps.removeExistingApp ?? defaultRemoveExistingApp;
   const ccsDir = (deps.getCcsDir ?? defaultGetCcsDir)();
   const appsDir = (deps.getAppsDir ?? defaultGetAppsDir)();
 
@@ -499,6 +512,21 @@ export async function handleBarInstall(
 
   const { downloadUrl } = releaseInfo;
   console.log(`[i] Installing CCS Bar from ${BAR_RELEASE_TAG}...`);
+
+  // 1b. Stale reinstall guard: remove the existing bundle BEFORE extraction so a
+  //     malformed archive that lacks the expected bundle cannot silently leave the
+  //     old version in place.  The removal window is intentionally small — release
+  //     info is already resolved so we are committed to downloading.
+  if (fs.existsSync(appPath)) {
+    try {
+      removeExistingApp(appPath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[X] Could not remove the existing CCS Bar.app: ${msg}`);
+      console.error('[i] Close any running instance and try again.');
+      return;
+    }
+  }
 
   // 2. Download and extract into ~/Applications.
   try {
@@ -551,24 +579,10 @@ export async function handleBarInstall(
     console.log('[!] Could not read app version from Info.plist.');
   }
 
-  // 5. Quarantine handling: run `xattr -dr com.apple.quarantine` automatically.
-  //    This clears the Gatekeeper quarantine flag that ad-hoc builds receive on download.
-  //    On success: print [OK] confirmation. On failure: fall back to printed guidance and
-  //    SKIP the launch handoff entirely — launching a still-quarantined app hits the
-  //    Gatekeeper block, so the user must clear quarantine manually first.
-  const quarantineCleared = await clearQuarantine(appPath);
-  if (quarantineCleared) {
-    console.log('[OK] Cleared Gatekeeper quarantine.');
-  } else {
-    console.log('[i] Gatekeeper note (ad-hoc build):');
-    console.log('    If macOS says the app is "damaged" or "unverified", run:');
-    console.log(`      xattr -dr com.apple.quarantine "${appPath}"`);
-    console.log('    Or right-click the app and select Open.');
-    console.log('[i] After clearing quarantine, run `ccs bar` to launch.');
-    return;
-  }
-
-  // 6. Capability handshake via GET /api/bar/summary.
+  // 5. Capability handshake via GET /api/bar/summary.
+  //    Runs BEFORE the quarantine-clear + launch handoff because it is a server-side
+  //    check unrelated to Gatekeeper. A failed quarantine clear must not prevent the
+  //    compat result from being shown to the user.
   //    Read bar.json for baseUrl if present; otherwise fall back to localhost:3000.
   const barJsonPath = path.join(ccsDir, 'bar.json');
   let baseUrl = 'http://127.0.0.1:3000';
@@ -599,6 +613,23 @@ export async function handleBarInstall(
     console.log('[i] Run `ccs bar` to start the server and recheck.');
   }
 
+  // 6. Quarantine handling: run `xattr -dr com.apple.quarantine` automatically.
+  //    This clears the Gatekeeper quarantine flag that ad-hoc builds receive on download.
+  //    On success: print [OK] confirmation. On failure: fall back to printed guidance and
+  //    SKIP the launch handoff entirely — launching a still-quarantined app hits the
+  //    Gatekeeper block, so the user must clear quarantine manually first.
+  const quarantineCleared = await clearQuarantine(appPath);
+  if (quarantineCleared) {
+    console.log('[OK] Cleared Gatekeeper quarantine.');
+  } else {
+    console.log('[i] Gatekeeper note (ad-hoc build):');
+    console.log('    If macOS says the app is "damaged" or "unverified", run:');
+    console.log(`      xattr -dr com.apple.quarantine "${appPath}"`);
+    console.log('    Or right-click the app and select Open.');
+    console.log('[i] After clearing quarantine, run `ccs bar` to launch.');
+    return;
+  }
+
   // 7. Launch handoff.
   //    Already-running check: if CCS Bar is running after a (re)install, skip the
   //    prompt entirely and print a restart hint (the user needs to quit and reopen
@@ -624,10 +655,9 @@ export async function handleBarInstall(
     if (shouldLaunch) {
       await launchBar([]);
     } else {
-      // Either user said no or non-TTY stdin
-      if (!process.stdin.isTTY) {
-        console.log('[i] Run `ccs bar` to launch.');
-      }
+      // User declined or non-TTY stdin — always print guidance so the user
+      // knows how to start the app after install.
+      console.log('[i] Run `ccs bar` to launch later.');
     }
   }
 }
