@@ -195,6 +195,11 @@ struct BarMenuView: View {
       if viewModel.isRefreshing {
         ProgressView().controlSize(.small)
       }
+      if let v = BarVersionDisplay.string() {
+        Text(v)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)

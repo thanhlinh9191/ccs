@@ -1436,6 +1436,15 @@ do {
   check(selectedIdx == 1, "screenPicker: exact hit selects right screen (index 1) for #1502 anchor")
 }
 
+// MARK: BarVersionDisplay — pure display-string helper
+
+check(BarVersionDisplay.displayString(for: nil) == nil, "version nil raw -> nil (no dangling 'v')")
+check(BarVersionDisplay.displayString(for: "") == nil, "version empty raw -> nil (no dangling 'v')")
+check(BarVersionDisplay.displayString(for: "1.5.0") == "v1.5.0", "version '1.5.0' -> 'v1.5.0'")
+check(BarVersionDisplay.displayString(for: "2.0.0") == "v2.0.0", "version '2.0.0' -> 'v2.0.0'")
+// Outside a bundle, string() must not crash and returns nil (no assertion on value — bundle absent).
+let _ = BarVersionDisplay.string()
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 

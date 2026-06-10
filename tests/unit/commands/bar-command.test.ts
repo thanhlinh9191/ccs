@@ -2622,8 +2622,9 @@ describe('bar install: already-running detection (Finding 3)', () => {
 
     const allOutput = consoleOutput.join('\n');
     // Must print the restart hint
-    expect(allOutput).toMatch(/currently running the previous version/i);
-    expect(allOutput).toMatch(/Quit and reopen/i);
+    expect(allOutput).toMatch(/currently running an older build/i);
+    expect(allOutput).toMatch(/Quit it from the menu bar/i);
+    expect(allOutput).toMatch(/run `ccs bar` to relaunch/i);
   });
 
   it('when not running after install: prompt path unchanged', async () => {
@@ -2646,7 +2647,7 @@ describe('bar install: already-running detection (Finding 3)', () => {
     expect(promptCalled).toBe(true);
     const allOutput = consoleOutput.join('\n');
     // The restart hint must NOT appear when bar is not running
-    expect(allOutput).not.toMatch(/currently running the previous version/i);
+    expect(allOutput).not.toMatch(/currently running an older build/i);
   });
 
   it('pgrep error treated as not running: prompt path unchanged', async () => {
@@ -2670,7 +2671,7 @@ describe('bar install: already-running detection (Finding 3)', () => {
     // pgrep error treated as not running → normal prompt flow
     expect(promptCalled).toBe(true);
     const allOutput = consoleOutput.join('\n');
-    expect(allOutput).not.toMatch(/currently running the previous version/i);
+    expect(allOutput).not.toMatch(/currently running an older build/i);
   });
 
   it('--launch with bar already running: launchBar still invoked', async () => {
@@ -2693,7 +2694,7 @@ describe('bar install: already-running detection (Finding 3)', () => {
     expect(launchCalled).toBe(true);
     // Restart hint must NOT appear when --launch is passed
     const allOutput = consoleOutput.join('\n');
-    expect(allOutput).not.toMatch(/currently running the previous version/i);
+    expect(allOutput).not.toMatch(/currently running an older build/i);
   });
 });
 

@@ -681,7 +681,7 @@ export async function handleBarInstall(
 
   if (barIsRunning && !forceLaunch) {
     console.log(
-      '[!] CCS Bar is currently running the previous version. Quit and reopen it (or run `ccs bar`) to use the update.'
+      '[!] CCS Bar is currently running an older build. Quit it from the menu bar, then run `ccs bar` to relaunch the updated app.'
     );
   } else if (forceLaunch) {
     await launchBar([]);
