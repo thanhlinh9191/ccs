@@ -1738,6 +1738,71 @@ describe('defaultFindRunningServer (GH-1500)', () => {
       expect(result).toBeNull();
     }
   });
+
+  it('detects a real HTTP server responding 200 on /api/bar/summary bound to ::1 only', async () => {
+    const http = await import('http');
+    const net = await import('net');
+
+    // Guard: check if IPv6 loopback is available on this runner.
+    // Some CI environments disable IPv6; we skip gracefully rather than fail.
+    let ipv6Available = false;
+    await new Promise<void>((resolve) => {
+      const probe = net.createServer();
+      probe.once('error', () => {
+        // EADDRNOTAVAIL or EAFNOSUPPORT → no IPv6 on this host
+        console.log('[i] Skipping IPv6 loopback test: ::1 not available on this runner');
+        resolve();
+      });
+      probe.listen(0, '::1', () => {
+        ipv6Available = true;
+        probe.close(() => resolve());
+      });
+    });
+
+    if (!ipv6Available) {
+      return;
+    }
+
+    // Start an ephemeral HTTP server bound exclusively to ::1.
+    // This simulates `ccs config` starting the web-server with host 'localhost'
+    // on macOS, where 'localhost' resolves to ::1.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '::1', resolve));
+    const addr = server.address() as { port: number };
+    const livePort = addr.port;
+
+    // Seed bar.json with the live port so it is checked first.
+    const ccsDir = path.join(tempHome, '.ccs');
+    fs.mkdirSync(ccsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'bar.json'),
+      JSON.stringify({ port: livePort, baseUrl: `http://[::1]:${livePort}`, authMode: 'loopback' })
+    );
+
+    moduleSeq++;
+    const mod = await import(
+      `../../../src/commands/bar/launch-subcommand?test=${Date.now()}-${moduleSeq}`
+    );
+    const { defaultFindRunningServer } = mod as {
+      defaultFindRunningServer: (ccsDir: string) => Promise<{ port: number; baseUrl: string } | null>;
+    };
+
+    let result: { port: number; baseUrl: string } | null = null;
+    try {
+      result = await defaultFindRunningServer(ccsDir);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+
+    expect(result).not.toBeNull();
+    expect(result?.port).toBe(livePort);
+    // baseUrl must use bracketed IPv6 literal — valid in URLs per RFC 2732;
+    // the Swift app reads this verbatim and URLSession handles bracketed IPv6 hosts.
+    expect(result?.baseUrl).toBe(`http://[::1]:${livePort}`);
+  });
 });
 
 // ---------------------------------------------------------------------------

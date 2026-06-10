@@ -77,21 +77,26 @@ export function resolveBarPort(ccsDir: string): number | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Probe candidate ports for a running CCS server on 127.0.0.1.
+ * Probe candidate ports for a running CCS server.
+ *
+ * Both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses are probed for
+ * each port. This is necessary because `ccs config` starts the server with
+ * host 'localhost', which macOS resolves to ::1 — an IPv4-only probe would
+ * miss that server and start a redundant second instance.
+ *
+ * Probe order per port: 127.0.0.1 first, then [::1]. First 200 wins.
  * The bar.json port (if present) is checked first so a previously-used port
  * gets priority. Short timeouts prevent hanging the launch flow.
  */
 export async function defaultFindRunningServer(ccsDir: string): Promise<DashboardInfo | null> {
   const { request } = await import('undici');
 
-  const barJsonPort = resolveBarPort(ccsDir);
-  const base = [3000, 3001, 3002, 8000, 8080];
-  const candidates: number[] =
-    barJsonPort !== null ? [barJsonPort, ...base.filter((p) => p !== barJsonPort)] : base;
-
-  for (const port of candidates) {
+  /**
+   * Probe a single URL. Returns true on HTTP 200, false on any other status
+   * or error (connection refused, timeout, etc.).
+   */
+  async function probe(url: string): Promise<boolean> {
     try {
-      const url = `http://127.0.0.1:${port}/api/bar/summary`;
       const { statusCode, body } = await request(url, {
         method: 'GET',
         headersTimeout: 1500,
@@ -101,11 +106,26 @@ export async function defaultFindRunningServer(ccsDir: string): Promise<Dashboar
       // body.dump() is not available in Bun's undici shim; body.text() works
       // cross-runtime and fully consumes the response stream.
       await body.text();
-      if (statusCode === 200) {
-        return { port, baseUrl: `http://127.0.0.1:${port}` };
-      }
+      return statusCode === 200;
     } catch {
-      // Connection refused, timeout, or any other error → try next candidate.
+      return false;
+    }
+  }
+
+  const barJsonPort = resolveBarPort(ccsDir);
+  const base = [3000, 3001, 3002, 8000, 8080];
+  const candidates: number[] =
+    barJsonPort !== null ? [barJsonPort, ...base.filter((p) => p !== barJsonPort)] : base;
+
+  for (const port of candidates) {
+    // Probe IPv4 loopback first (common for explicitly-bound servers).
+    if (await probe(`http://127.0.0.1:${port}/api/bar/summary`)) {
+      return { port, baseUrl: `http://127.0.0.1:${port}` };
+    }
+    // Probe IPv6 loopback — `ccs config` binds 'localhost' which resolves to
+    // ::1 on macOS, so this is the common case for a running CCS server.
+    if (await probe(`http://[::1]:${port}/api/bar/summary`)) {
+      return { port, baseUrl: `http://[::1]:${port}` };
     }
   }
   return null;
