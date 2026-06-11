@@ -155,26 +155,27 @@ export async function maybeOfferPoolRouting(
     return { prompted: false, enabled: false, skipped: true, skipReason: 'dismissed' };
   }
 
-  // Remote / Docker target: print hint, do not prompt
+  // Remote / Docker target: print hint, do not prompt.
+  // Check before account count so remote targets with locally-unknown registries
+  // still get the hint (the remote CLIProxy holds the authoritative account list).
   const target = getProxyTarget();
   if (target.isRemote) {
     printRemoteHint(provider);
     return { prompted: false, enabled: false, skipped: true, skipReason: 'remote-target' };
   }
 
-  // Non-TTY (piped input / CI): skip silently
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    return { prompted: false, enabled: false, skipped: true, skipReason: 'non-tty' };
-  }
-
   // Verify the actual post-add count is >= 2.  registerAccount deduplicates by
   // email/token-file so re-authenticating the single existing account keeps the
-  // count at 1 — not a real 1->2 transition.  Checking here (after TTY and remote
-  // guards) ensures the re-auth path correctly falls back to not-at-transition
-  // without triggering the prompt for a single-account user.
+  // count at 1 — not a real 1->2 transition.  Checking here (before TTY) ensures
+  // re-auth dedup always returns not-at-transition even in non-TTY/CI sessions.
   const accountCountAfter = getProviderAccounts(provider).length;
   if (accountCountAfter < 2) {
     return { prompted: false, enabled: false, skipped: true, skipReason: 'not-at-transition' };
+  }
+
+  // Non-TTY (piped input / CI): skip silently
+  if (!process.stdin.isTTY || !process.stderr.isTTY) {
+    return { prompted: false, enabled: false, skipped: true, skipReason: 'non-tty' };
   }
 
   // Gather all providers with 2+ accounts for disclosure

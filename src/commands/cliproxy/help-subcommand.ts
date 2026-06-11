@@ -66,6 +66,19 @@ export async function showHelp(): Promise<void> {
         ['pool', 'Show pool routing status (fill-first + affinity + 429 cooldown)'],
         ['pool --enable', 'Enable pool routing (writes cooling/affinity/retry-cap to config)'],
         ['pool --disable', 'Disable pool routing and restore non-pool config'],
+        [
+          'accounts order <provider>',
+          'Show effective drain order (priority bucket desc, then ID asc)',
+        ],
+        [
+          'accounts order <provider> --by-tier',
+          'Set drain order from tier metadata (ultra > pro > free)',
+        ],
+        [
+          'accounts order <provider> --set a,b,c',
+          'Set manual drain order (comma-separated account IDs)',
+        ],
+        ['accounts order <provider> --reset', 'Revert drain order to stable file order'],
       ],
     ],
     [
