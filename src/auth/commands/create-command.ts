@@ -29,7 +29,11 @@ import { exitWithError } from '../../errors';
 import { ExitCode } from '../../errors/exit-codes';
 import { CommandContext, parseArgs, rejectUnsupportedAuthOptions } from './types';
 import { stripAmbientProviderCredentials } from './create-command-env';
-import { isUnifiedMode } from '../../config/config-loader-facade';
+import { isUnifiedMode, hasUnifiedConfig } from '../../config/config-loader-facade';
+import {
+  maybeShowPoolOnboardingHint,
+  countNativeClaudeProfiles,
+} from '../../cliproxy/routing/pool-onboarding-hint';
 
 function sanitizeProfileNameForInstance(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
@@ -184,6 +188,18 @@ export async function handleCreate(ctx: CommandContext, args: string[]): Promise
       }
     }
   };
+
+  // Pool suggestion: when creating a 2nd+ native Claude profile, show the
+  // once-per-install onboarding hint.  Print-only, TTY-gated, never blocks.
+  // Pass existingCount + 1 so the hint sees the post-create count (>= 2).
+  // Gated on hasUnifiedConfig() so legacy profiles.json-only installs receive
+  // the hint from ccs doctor only (where dismissal semantics are preserved).
+  if (!profileExistedBeforeCreate && hasUnifiedConfig()) {
+    const existingCount = countNativeClaudeProfiles();
+    if (existingCount >= 1) {
+      maybeShowPoolOnboardingHint(existingCount + 1);
+    }
+  }
 
   try {
     // Create instance directory

@@ -150,6 +150,12 @@ export interface CLIProxyPoolRoutingConfig {
    * Prevents re-prompting after an explicit decline.
    */
   prompt_dismissed?: boolean;
+  /**
+   * Whether the user has dismissed the pool onboarding hint.
+   * Fires once when >= 2 native Claude profiles exist and no pool is enabled.
+   * Shares the pool_routing key family - one schema home, no duplicate plumbing.
+   */
+  onboarding_hint_dismissed?: boolean;
 }
 
 /**

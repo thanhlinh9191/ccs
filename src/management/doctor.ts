@@ -17,6 +17,7 @@ import {
 } from './checks';
 import { runAutoRepair } from './repair';
 import { getDockerKeyRotationStatus } from '../docker/docker-key-rotation';
+import { maybeShowPoolOnboardingHint } from '../cliproxy/routing/pool-onboarding-hint';
 
 /**
  * Doctor Class - Orchestrates health checks
@@ -156,6 +157,16 @@ class Doctor {
       console.log('');
       console.log(info(`Tip: Use ${color('ccs config', 'command')} for web-based configuration`));
     }
+
+    // Pool onboarding hint: fires when >= 2 native Claude profiles exist and
+    // pool routing is not yet enabled.  TTY-gated and never blocks (failures are
+    // swallowed inside maybeShowPoolOnboardingHint).  This is the deliberately
+    // ungated discovery surface for legacy profiles.json-only installs, which
+    // have no config.yaml to persist dismissal: those users may see the hint on
+    // every doctor run until they run `ccs migrate` or enable pool routing.
+    // Unified installs persist dismissal in config.yaml, so for them it is
+    // genuinely once per install.
+    maybeShowPoolOnboardingHint();
 
     console.log('');
   }
