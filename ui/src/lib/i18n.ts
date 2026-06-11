@@ -1917,6 +1917,16 @@ const resources = {
         roundRobin: 'Round robin spreads usage.',
         fillFirst: 'Fill first keeps backup accounts cold until they are needed.',
         routingStrategy: 'Routing strategy',
+        poolRouting: 'Pool routing',
+        poolRoutingOn: 'On',
+        poolRoutingOff: 'Off',
+        poolRoutingManaged:
+          'Pool routing is on: CCS manages strategy (fill-first), session affinity, and cooling for the whole proxy.',
+        poolRoutingOffHint:
+          'Pool routing is off. Enable it from the CLI (ccs cliproxy pool --enable) for fill-first drain with cooldown.',
+        poolMaxRetry: 'Max retry {{count}}',
+        drainOrderHint:
+          'Per-account drain order and cooldown state: run ccs cliproxy quota or ccs cliproxy accounts order <provider>.',
         optionalRouting: 'Optional routing',
         sessionAffinity: 'Session affinity',
         sessionAffinityOn: 'On',
@@ -4542,6 +4552,16 @@ const resources = {
         roundRobin: '轮询模式均匀分配用量。',
         fillFirst: '优先填满模式让备用账号保持冷启动直到需要时。',
         routingStrategy: '路由策略',
+        poolRouting: '账号池路由',
+        poolRoutingOn: '开启',
+        poolRoutingOff: '关闭',
+        poolRoutingManaged:
+          '账号池路由已开启：CCS 为整个代理统一管理策略（优先填满）、会话粘性和冷却。',
+        poolRoutingOffHint:
+          '账号池路由已关闭。可在命令行启用（ccs cliproxy pool --enable）以使用带冷却的优先填满。',
+        poolMaxRetry: '最大重试 {{count}}',
+        drainOrderHint:
+          '查看每个账号的排空顺序和冷却状态：运行 ccs cliproxy quota 或 ccs cliproxy accounts order <provider>。',
         optionalRouting: '可选路由',
         sessionAffinity: '会话粘性',
         sessionAffinityOn: '开启',
@@ -7230,6 +7250,16 @@ const resources = {
         roundRobin: 'Round-robin phân bổ đều lượt dùng.',
         fillFirst: 'Fill-first giữ tài khoản dự phòng cho đến khi cần thiết.',
         routingStrategy: 'Chiến lược định tuyến',
+        poolRouting: 'Định tuyến nhóm',
+        poolRoutingOn: 'Bật',
+        poolRoutingOff: 'Tắt',
+        poolRoutingManaged:
+          'Định tuyến nhóm đang bật: CCS quản lý chiến lược (fill-first), ghim phiên và làm nguội cho toàn bộ proxy.',
+        poolRoutingOffHint:
+          'Định tuyến nhóm đang tắt. Bật từ CLI (ccs cliproxy pool --enable) để dùng fill-first kèm làm nguội.',
+        poolMaxRetry: 'Thử lại tối đa {{count}}',
+        drainOrderHint:
+          'Thứ tự rút và trạng thái làm nguội từng tài khoản: chạy ccs cliproxy quota hoặc ccs cliproxy accounts order <provider>.',
         optionalRouting: 'Định tuyến tùy chọn',
         sessionAffinity: 'Ghim phiên',
         sessionAffinityOn: 'Bật',
@@ -10395,6 +10425,16 @@ const resources = {
         roundRobin: 'ラウンドロビンで利用を分散します。',
         fillFirst: 'Fill first は、バックアップアカウントが必要になるまで待機させます。',
         routingStrategy: 'ルーティング戦略',
+        poolRouting: 'プールルーティング',
+        poolRoutingOn: 'オン',
+        poolRoutingOff: 'オフ',
+        poolRoutingManaged:
+          'プールルーティングが有効です。CCS がプロキシ全体の戦略（fill-first）、セッション固定、クールダウンを管理します。',
+        poolRoutingOffHint:
+          'プールルーティングは無効です。CLI（ccs cliproxy pool --enable）で有効にすると、クールダウン付きの fill-first を利用できます。',
+        poolMaxRetry: '最大リトライ {{count}}',
+        drainOrderHint:
+          'アカウントごとのドレイン順序とクールダウン状態は、ccs cliproxy quota または ccs cliproxy accounts order <provider> を実行してください。',
         optionalRouting: 'オプションのルーティング',
         sessionAffinity: 'セッション固定',
         sessionAffinityOn: 'オン',
@@ -12657,6 +12697,16 @@ const resources = {
         roundRobin: '라운드 로빈은 사용량을 분산합니다.',
         fillFirst: '먼저 채우기는 필요할 때까지 백업 계정을 차갑게 유지합니다.',
         routingStrategy: '라우팅 전략',
+        poolRouting: '풀 라우팅',
+        poolRoutingOn: '켜짐',
+        poolRoutingOff: '꺼짐',
+        poolRoutingManaged:
+          '풀 라우팅이 켜져 있습니다. CCS가 프록시 전체의 전략(fill-first), 세션 어피니티, 쿨다운을 관리합니다.',
+        poolRoutingOffHint:
+          '풀 라우팅이 꺼져 있습니다. CLI(ccs cliproxy pool --enable)에서 켜면 쿨다운이 있는 fill-first를 사용할 수 있습니다.',
+        poolMaxRetry: '최대 재시도 {{count}}',
+        drainOrderHint:
+          '계정별 드레인 순서와 쿨다운 상태는 ccs cliproxy quota 또는 ccs cliproxy accounts order <provider>를 실행하세요.',
         optionalRouting: '선택적 라우팅',
         sessionAffinity: '세션 어피니티',
         sessionAffinityOn: '켜짐',

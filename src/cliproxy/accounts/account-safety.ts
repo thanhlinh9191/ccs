@@ -112,6 +112,37 @@ function loadQuotaPaused(): QuotaPausedFile {
   return { entries: [] };
 }
 
+/**
+ * Read-only view of a persisted quota-cooldown pause.
+ * Exposed for visibility surfaces (e.g. `ccs cliproxy quota` pool section)
+ * that must distinguish a quota cooldown (with a reset time) from a manual pause.
+ */
+export interface QuotaCooldownEntry {
+  provider: CLIProxyProvider;
+  accountId: string;
+  /** ISO timestamp when the account was paused (matches AccountInfo.pausedAt) */
+  pausedAt: string;
+  /** Epoch ms when the cooldown is eligible to be lifted */
+  until: number;
+  reason: 'quota_exhausted';
+}
+
+/**
+ * Return the persisted quota-cooldown pauses recorded on disk.
+ *
+ * This is the cross-process source of truth for quota cooldowns: the in-memory
+ * cooldown map in quota-manager is process-local, but quota-paused.json is
+ * written by the long-lived proxy/monitor process and read by short-lived CLI
+ * invocations. Callers use it to label an account as cooling (vs manually
+ * paused) and to show the reset time.
+ *
+ * Entries are returned as-is (including expired ones); callers decide whether to
+ * treat `until <= now` as already cooled down.
+ */
+export function readQuotaCooldownEntries(): QuotaCooldownEntry[] {
+  return loadQuotaPaused().entries.map((entry) => ({ ...entry }));
+}
+
 function saveQuotaPaused(data: QuotaPausedFile): void {
   const filePath = getQuotaPausedPath();
   if (data.entries.length === 0) {

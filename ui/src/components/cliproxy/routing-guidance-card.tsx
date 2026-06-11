@@ -46,6 +46,8 @@ export function RoutingGuidanceCard({
 }: RoutingGuidanceCardProps) {
   const { t } = useTranslation();
   const currentStrategy = state?.strategy ?? 'round-robin';
+  const poolEnabled = state?.poolRouting?.enabled ?? false;
+  const poolMaxRetry = state?.poolRouting?.maxRetryCredentials;
   const currentAffinityEnabled = sessionAffinityState?.enabled ?? false;
   const currentAffinityTtl = sessionAffinityState?.ttl ?? '1h';
   const sessionAffinityManageable = sessionAffinityState?.manageable ?? true;
@@ -175,6 +177,29 @@ export function RoutingGuidanceCard({
         <div className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5">
           <div className="min-w-0">
             <div className="text-[10px] font-medium text-foreground">
+              {t('routingGuidance.poolRouting')}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {poolEnabled && poolMaxRetry !== undefined
+                ? t('routingGuidance.poolMaxRetry', { count: poolMaxRetry })
+                : t('routingGuidance.drainOrderHint')}
+            </div>
+          </div>
+          <Badge
+            variant={poolEnabled ? 'secondary' : 'outline'}
+            title={
+              poolEnabled
+                ? t('routingGuidance.poolRoutingManaged')
+                : t('routingGuidance.poolRoutingOffHint')
+            }
+          >
+            {poolEnabled ? t('routingGuidance.poolRoutingOn') : t('routingGuidance.poolRoutingOff')}
+          </Badge>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5">
+          <div className="min-w-0">
+            <div className="text-[10px] font-medium text-foreground">
               {t('routingGuidance.sessionAffinity')}
             </div>
             <div className="text-[10px] text-muted-foreground">
@@ -240,10 +265,31 @@ export function RoutingGuidanceCard({
             <Badge variant="secondary">{currentStrategy}</Badge>
             {state ? <Badge variant="outline">{sourceLabel}</Badge> : null}
             {state ? <Badge variant="outline">{state.target}</Badge> : null}
+            {state ? (
+              <Badge
+                variant={poolEnabled ? 'secondary' : 'outline'}
+                title={
+                  poolEnabled
+                    ? t('routingGuidance.poolRoutingManaged')
+                    : t('routingGuidance.poolRoutingOffHint')
+                }
+              >
+                {t('routingGuidance.poolRouting')}:{' '}
+                {poolEnabled
+                  ? t('routingGuidance.poolRoutingOn')
+                  : t('routingGuidance.poolRoutingOff')}
+                {poolEnabled && poolMaxRetry !== undefined
+                  ? ` · ${t('routingGuidance.poolMaxRetry', { count: poolMaxRetry })}`
+                  : ''}
+              </Badge>
+            ) : null}
           </div>
           <p className="max-w-3xl text-xs leading-5 text-muted-foreground">
             Proxy-wide account rotation. CCS keeps round-robin as the default until you explicitly
             change it.
+          </p>
+          <p className="max-w-3xl text-[11px] leading-5 text-muted-foreground">
+            {t('routingGuidance.drainOrderHint')}
           </p>
         </div>
 

@@ -263,6 +263,26 @@ export function isOnCooldown(provider: CLIProxyProvider, accountId: string): boo
 }
 
 /**
+ * Get the epoch-ms timestamp when an account's in-memory cooldown expires.
+ * Returns undefined when the account is not on cooldown (or the cooldown has
+ * already lapsed). This is the process-local cooldown; for the cross-process
+ * source of truth see readQuotaCooldownEntries() in account-safety.
+ */
+export function getCooldownUntil(
+  provider: CLIProxyProvider,
+  accountId: string
+): number | undefined {
+  const key = getCacheKey(provider, accountId);
+  const entry = cooldownMap.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.until) {
+    cooldownMap.delete(key);
+    return undefined;
+  }
+  return entry.until;
+}
+
+/**
  * Apply cooldown to an exhausted account
  */
 export function applyCooldown(
