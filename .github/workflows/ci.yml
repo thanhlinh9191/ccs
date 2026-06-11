@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, kai/feat/1464-account-pools]
 
 # Design notes:
 # - Matrix parallelism cuts wall time from ~3-4min to ~60-90s (cache warm).
