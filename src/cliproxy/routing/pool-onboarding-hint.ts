@@ -96,6 +96,11 @@ function isPoolEnabled(config?: UnifiedConfig): boolean {
  *
  * Uses ProfileRegistry so the count respects both legacy profiles.json and
  * unified config accounts - same source of truth as the rest of the codebase.
+ *
+ * type === 'account' implies Claude: per the profile-registry schema, every
+ * account profile is an isolated Claude instance (CLAUDE_CONFIG_DIR lane) with
+ * no CLI discriminator. Gemini/Codex multi-account lives in CLIProxy auth
+ * files, never in profiles.json, so this filter cannot over-count.
  */
 export function countNativeClaudeProfiles(): number {
   try {

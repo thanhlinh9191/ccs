@@ -149,13 +149,10 @@ export async function maybeOfferPoolRouting(
   // orphaning the user's config.json profiles.  Skip entirely before any prompt
   // or dismissal persistence.  Mirrors the guards in create-command.ts and
   // account-flow.ts and the hazard documented in pool-onboarding-hint.ts.
+  // Silent by design: legacy installs receive pool guidance exclusively from
+  // ccs doctor (pool-onboarding-hint site 1); printing here would nag on every
+  // account add with no dismissal available.
   if (!hasUnifiedConfig()) {
-    console.log(
-      info(
-        '[i] Multiple accounts detected, but pool routing needs the unified config. ' +
-          "Run 'ccs migrate' first, then 'ccs cliproxy pool --enable'."
-      )
-    );
     return { prompted: false, enabled: false, skipped: true, skipReason: 'legacy-config' };
   }
 
