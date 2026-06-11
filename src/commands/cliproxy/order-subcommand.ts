@@ -10,18 +10,15 @@
 
 import { initUI, header, subheader, color, dim, ok, fail, warn, info } from '../../utils/ui';
 import { extractOption, hasAnyFlag } from '../arg-extractor';
-import {
-  saveDrainOrderConfig,
-  loadDrainOrderConfig,
-  clearDrainOrderConfig,
-} from '../../cliproxy/accounts/registry';
+import { saveDrainOrderConfig, clearDrainOrderConfig } from '../../cliproxy/accounts/registry';
 import { getProviderAccounts } from '../../cliproxy/accounts/query';
 import {
   computeManualDrainOrder,
   computeTierDrainOrder,
   applyDrainOrder,
-  annotateCurrentPriorities,
+  resolveEffectiveDrainOrder,
   readAuthFilePriority,
+  tieBreakKey,
   type DrainOrderEntry,
   type DrainOrderInput,
 } from '../../cliproxy/accounts/drain-order';
@@ -35,22 +32,9 @@ import { resolveLifecyclePort } from '../../cliproxy/config/port-manager';
 /** Providers where tier metadata is expected and --by-tier is meaningful. */
 const TIER_AWARE_PROVIDERS = new Set<CLIProxyProvider>(['agy', 'gemini']);
 
-/**
- * Tie-break key for a token file, matching the upstream Go selector.
- * The selector breaks priority ties by Auth.ID asc. Upstream (synthesizer
- * file.go:120-122) lowercases Auth.ID only on Windows; on other platforms it
- * compares by raw byte order. We mirror that platform-conditional behaviour so
- * the displayed order matches what CLIProxy actually drains.
- *
- * @param platform process.platform; defaults to the current platform. Exposed
- *   for tests so non-Windows byte-order behaviour can be asserted deterministically.
- */
-export function tieBreakKey(
-  tokenFile: string,
-  platform: NodeJS.Platform = process.platform
-): string {
-  return platform === 'win32' ? tokenFile.toLowerCase() : tokenFile;
-}
+// tieBreakKey now lives in drain-order.ts (shared with the quota pool section);
+// re-exported here so existing callers/tests keep importing it from this module.
+export { tieBreakKey };
 
 function formatTierLabel(tier: AccountTier | undefined, tierDerived: boolean): string {
   if (!tier || tier === 'unknown') {
@@ -133,38 +117,23 @@ async function handleOrderShow(provider: CLIProxyProvider): Promise<void> {
     return;
   }
 
-  const drainCfg = loadDrainOrderConfig(provider);
-  let entries: DrainOrderEntry[];
-  let modeLabel: string;
+  // Shared effective-order resolver: same semantics the quota Pool section and
+  // the selector use (sort by on-disk priority, surface drift).
+  const effective = resolveEffectiveDrainOrder(provider, accounts);
 
-  // Manual mode is only usable when at least one stored ID still maps to a live
-  // account. If every stored ID is stale, fall back to the file-order view.
-  let manualValidIds: string[] | undefined;
-  if (drainCfg?.mode === 'manual' && drainCfg.orderedIds && drainCfg.orderedIds.length > 0) {
-    const existingIds = new Set(accounts.map((a) => a.accountId));
-    manualValidIds = drainCfg.orderedIds.filter((id) => existingIds.has(id));
-  }
-
-  if (manualValidIds && manualValidIds.length > 0) {
-    entries = computeManualDrainOrder(manualValidIds, accounts);
-    modeLabel = `manual (${color('--set', 'command')})`;
-  } else if (drainCfg?.mode === 'tier') {
-    entries = computeTierDrainOrder(accounts);
-    modeLabel = `tier-derived (${color('--by-tier', 'command')})`;
-  } else {
+  if (effective.mode === 'file') {
     // File order: no priority writes; show stable file order. Reached when no
     // config is stored, or when a stored manual order has only stale IDs.
     printFileOrderView(provider, accounts);
     return;
   }
 
-  annotateCurrentPriorities(entries);
-
-  // Detect drift: any account where the computed config priority does not match
-  // what is actually on disk (the selector's real input). Missing file priority
-  // (undefined) treated as 0 by the selector, so it also counts as drift when
-  // the config says something higher.
-  const hasDrift = entries.some((e) => (e.currentPriority ?? 0) !== e.priority);
+  const entries = effective.entries;
+  const modeLabel =
+    effective.mode === 'manual'
+      ? `manual (${color('--set', 'command')})`
+      : `tier-derived (${color('--by-tier', 'command')})`;
+  const hasDrift = effective.hasDrift;
 
   console.log(`  Mode:  ${modeLabel}`);
   if (hasDrift) {

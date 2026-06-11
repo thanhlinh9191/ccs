@@ -56,7 +56,10 @@ export async function showHelp(): Promise<void> {
         ['default <account>', 'Set default account for rotation'],
         ['pause <account>', 'Pause account (skip in rotation)'],
         ['resume <account>', 'Resume paused account'],
-        ['quota', 'Show quota status for all providers (Codex/Claude include 5h + weekly reset)'],
+        [
+          'quota',
+          'Show quota status + pool context (drain order, per-account available/cooling/paused)',
+        ],
         ['quota --provider <name>', `Filter by provider (${QUOTA_PROVIDER_HELP_TEXT})`],
         ['routing', 'Show current routing strategy and manual guidance'],
         ['routing explain', 'Explain strategy vs session-affinity and how sessions are recognized'],

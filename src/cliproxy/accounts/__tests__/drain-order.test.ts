@@ -591,3 +591,133 @@ describe('attribution stability - auth_index unaffected by priority rewrite', ()
     expect(map.get('1')).toBe('string@x.com');
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveEffectiveDrainOrder - shared effective-order resolver
+// (consumed by `accounts order` show AND the quota pool section)
+// ---------------------------------------------------------------------------
+
+describe('resolveEffectiveDrainOrder', () => {
+  it('returns empty file-order result for no active accounts', async () => {
+    await withIsolatedHome(async () => {
+      const { resolveEffectiveDrainOrder } = await loadDrainOrder();
+      const result = resolveEffectiveDrainOrder('claude', []);
+      expect(result.mode).toBe('file');
+      expect(result.entries).toEqual([]);
+      expect(result.hasDrift).toBe(false);
+    });
+  });
+
+  it('uses stable file order (tieBreakKey) and reports no drift when no config stored', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      const authDir = path.join(homeDir, '.ccs', 'cliproxy', 'auth');
+      writeAuthFile(authDir, 'claude-b.json', { email: 'b@x.com' });
+      writeAuthFile(authDir, 'claude-a.json', { email: 'a@x.com' });
+
+      const { resolveEffectiveDrainOrder } = await loadDrainOrder();
+      const result = resolveEffectiveDrainOrder('claude', [
+        { accountId: 'b@x.com', tokenFile: 'claude-b.json' },
+        { accountId: 'a@x.com', tokenFile: 'claude-a.json' },
+      ]);
+      expect(result.mode).toBe('file');
+      expect(result.entries.map((e: { accountId: string }) => e.accountId)).toEqual([
+        'a@x.com',
+        'b@x.com',
+      ]);
+      expect(result.hasDrift).toBe(false);
+    });
+  });
+
+  it('file-order: residual on-disk priorities reorder display to match the selector and flag drift', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      const authDir = path.join(homeDir, '.ccs', 'cliproxy', 'auth');
+      // No drain order config stored -> file mode. But residual priorities are
+      // left on disk (e.g. after `order --reset` did not strip the attribute).
+      // The selector follows the file, so b (priority 5) must sort before a
+      // (priority 1) even though tieBreakKey alone would put a first, and drift
+      // is flagged so the user knows the file disagrees with "plain file order".
+      writeAuthFile(authDir, 'claude-a.json', { email: 'a@x.com', priority: 1 });
+      writeAuthFile(authDir, 'claude-b.json', { email: 'b@x.com', priority: 5 });
+
+      const { resolveEffectiveDrainOrder } = await loadDrainOrder();
+      const result = resolveEffectiveDrainOrder('claude', [
+        { accountId: 'a@x.com', tokenFile: 'claude-a.json' },
+        { accountId: 'b@x.com', tokenFile: 'claude-b.json' },
+      ]);
+      expect(result.mode).toBe('file');
+      expect(result.entries.map((e: { accountId: string }) => e.accountId)).toEqual([
+        'b@x.com',
+        'a@x.com',
+      ]);
+      expect(result.hasDrift).toBe(true);
+    });
+  });
+
+  it('sorts manual order by ON-DISK priority, not computed config, and flags drift', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      const authDir = path.join(homeDir, '.ccs', 'cliproxy', 'auth');
+      // Two registered accounts; manual config says a then b (a > b computed).
+      writeAuthFile(authDir, 'antigravity-a.json', { email: 'a@x.com', type: 'antigravity' });
+      writeAuthFile(authDir, 'antigravity-b.json', { email: 'b@x.com', type: 'antigravity' });
+
+      const { registerAccount, saveDrainOrderConfig } = await loadRegistry();
+      registerAccount('agy', 'antigravity-a.json', 'a@x.com');
+      registerAccount('agy', 'antigravity-b.json', 'b@x.com');
+      saveDrainOrderConfig('agy', { mode: 'manual', orderedIds: ['a@x.com', 'b@x.com'] });
+
+      // On disk, re-auth/--reset left b with a HIGHER priority than a. The
+      // selector follows the file, so b should come first and drift is flagged.
+      const { writeAuthFilePriorityDirect, resolveEffectiveDrainOrder } = await loadDrainOrder();
+      writeAuthFilePriorityDirect('antigravity-a.json', 1);
+      writeAuthFilePriorityDirect('antigravity-b.json', 5);
+
+      const result = resolveEffectiveDrainOrder('agy', [
+        { accountId: 'a@x.com', tokenFile: 'antigravity-a.json' },
+        { accountId: 'b@x.com', tokenFile: 'antigravity-b.json' },
+      ]);
+      expect(result.mode).toBe('manual');
+      // b@x.com first because its ON-DISK priority (5) beats a@x.com (1).
+      expect(result.entries.map((e: { accountId: string }) => e.accountId)).toEqual([
+        'b@x.com',
+        'a@x.com',
+      ]);
+      expect(result.hasDrift).toBe(true);
+    });
+  });
+
+  it('reports no drift when on-disk priorities match the computed manual config', async () => {
+    await withIsolatedHome(async (homeDir) => {
+      const authDir = path.join(homeDir, '.ccs', 'cliproxy', 'auth');
+      writeAuthFile(authDir, 'antigravity-a.json', { email: 'a@x.com', type: 'antigravity' });
+      writeAuthFile(authDir, 'antigravity-b.json', { email: 'b@x.com', type: 'antigravity' });
+
+      const { registerAccount, saveDrainOrderConfig } = await loadRegistry();
+      registerAccount('agy', 'antigravity-a.json', 'a@x.com');
+      registerAccount('agy', 'antigravity-b.json', 'b@x.com');
+      saveDrainOrderConfig('agy', { mode: 'manual', orderedIds: ['a@x.com', 'b@x.com'] });
+
+      // Apply the computed config to disk first, then resolve: no drift.
+      const { computeManualDrainOrder, applyDrainOrder, resolveEffectiveDrainOrder } =
+        await loadDrainOrder();
+      const entries = computeManualDrainOrder(
+        ['a@x.com', 'b@x.com'],
+        [
+          { accountId: 'a@x.com', tokenFile: 'antigravity-a.json' },
+          { accountId: 'b@x.com', tokenFile: 'antigravity-b.json' },
+        ]
+      );
+      await applyDrainOrder(entries, false);
+
+      const result = resolveEffectiveDrainOrder('agy', [
+        { accountId: 'a@x.com', tokenFile: 'antigravity-a.json' },
+        { accountId: 'b@x.com', tokenFile: 'antigravity-b.json' },
+      ]);
+      expect(result.mode).toBe('manual');
+      expect(result.entries.map((e: { accountId: string }) => e.accountId)).toEqual([
+        'a@x.com',
+        'b@x.com',
+      ]);
+      expect(result.hasDrift).toBe(false);
+    });
+  });
+});

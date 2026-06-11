@@ -254,12 +254,24 @@ export function disablePoolRouting(
 const GO_DURATION_SEGMENT = String.raw`(?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|s|m|h))`;
 const GO_DURATION_PATTERN = new RegExp(`^${GO_DURATION_SEGMENT}+$`);
 
+/**
+ * Pool routing mode summary surfaced alongside routing state for the dashboard.
+ * When pool routing is enabled the generator forces fill-first + session affinity
+ * + cooling, regardless of stored routing values.
+ */
+export interface CliproxyPoolRoutingState {
+  enabled: boolean;
+  maxRetryCredentials?: number;
+}
+
 export interface CliproxyRoutingState {
   strategy: CliproxyRoutingStrategy;
   source: 'live' | 'config';
   target: 'local' | 'remote';
   reachable: boolean;
   message?: string;
+  /** Pool routing mode (proxy-wide). Present for both local and remote targets. */
+  poolRouting?: CliproxyPoolRoutingState;
 }
 
 export interface CliproxyRoutingApplyResult extends CliproxyRoutingState {
@@ -381,8 +393,28 @@ export async function fetchLiveCliproxyRoutingStrategy(): Promise<CliproxyRoutin
   return strategy;
 }
 
+/**
+ * Read the pool routing mode from the unified config.
+ * Pool routing is proxy-wide opt-in; this reflects the persisted flag, not a
+ * live selector probe.
+ */
+export function getCliproxyPoolRoutingState(): CliproxyPoolRoutingState {
+  const pool = loadOrCreateUnifiedConfig().cliproxy?.pool_routing;
+  const enabled = pool?.enabled === true;
+  return {
+    enabled,
+    // When pool routing is enabled the generator applies the POOL_MAX_RETRY_CREDENTIALS
+    // default, so surface the same effective value here to match the generated
+    // config. When disabled, max-retry does not apply; leave it unset.
+    maxRetryCredentials: enabled
+      ? (pool?.max_retry_credentials ?? POOL_MAX_RETRY_CREDENTIALS)
+      : undefined,
+  };
+}
+
 export async function readCliproxyRoutingState(): Promise<CliproxyRoutingState> {
   const target = getCliproxyRoutingTarget();
+  const poolRouting = getCliproxyPoolRoutingState();
 
   if (target.isRemote) {
     return {
@@ -390,6 +422,7 @@ export async function readCliproxyRoutingState(): Promise<CliproxyRoutingState> 
       source: 'live',
       target: 'remote',
       reachable: true,
+      poolRouting,
     };
   }
 
@@ -399,6 +432,7 @@ export async function readCliproxyRoutingState(): Promise<CliproxyRoutingState> 
       source: 'live',
       target: 'local',
       reachable: true,
+      poolRouting,
     };
   } catch {
     return {
@@ -407,6 +441,7 @@ export async function readCliproxyRoutingState(): Promise<CliproxyRoutingState> 
       target: 'local',
       reachable: false,
       message: 'Local CLIProxy is not reachable. Showing the saved startup default.',
+      poolRouting,
     };
   }
 }

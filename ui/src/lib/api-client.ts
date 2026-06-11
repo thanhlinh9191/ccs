@@ -509,12 +509,19 @@ export interface AuthStatus {
 
 export type RoutingStrategy = 'round-robin' | 'fill-first';
 
+export interface CliproxyPoolRoutingState {
+  enabled: boolean;
+  maxRetryCredentials?: number;
+}
+
 export interface CliproxyRoutingState {
   strategy: RoutingStrategy;
   source: 'live' | 'config';
   target: 'local' | 'remote';
   reachable: boolean;
   message?: string;
+  /** Pool routing mode (proxy-wide). */
+  poolRouting?: CliproxyPoolRoutingState;
 }
 
 export interface CliproxyRoutingApplyResult extends CliproxyRoutingState {

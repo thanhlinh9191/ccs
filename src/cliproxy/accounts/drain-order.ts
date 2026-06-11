@@ -19,7 +19,9 @@ import {
   buildProxyUrl,
   buildManagementHeaders,
 } from '../proxy/proxy-target-resolver';
+import { loadDrainOrderConfig } from './registry';
 import type { AccountTier } from './types';
+import type { CLIProxyProvider } from '../types';
 
 /** Minimum valid priority value. Management layer treats 0 as delete. */
 export const MIN_PRIORITY = 1;
@@ -363,4 +365,134 @@ export function annotateCurrentPriorities(entries: DrainOrderEntry[]): void {
   for (const entry of entries) {
     entry.currentPriority = readAuthFilePriority(entry.tokenFile);
   }
+}
+
+/**
+ * Tie-break key for a token file, matching the upstream Go selector.
+ * The selector breaks priority ties by Auth.ID asc. Upstream (synthesizer
+ * file.go:120-122) lowercases Auth.ID only on Windows; on other platforms it
+ * compares by raw byte order. We mirror that platform-conditional behaviour so
+ * the displayed order matches what CLIProxy actually drains.
+ *
+ * @param platform process.platform; defaults to the current platform. Exposed
+ *   for tests so non-Windows byte-order behaviour can be asserted deterministically.
+ */
+export function tieBreakKey(
+  tokenFile: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  return platform === 'win32' ? tokenFile.toLowerCase() : tokenFile;
+}
+
+/** How the effective drain order was derived. */
+export type EffectiveDrainOrderMode = 'manual' | 'tier' | 'file';
+
+/**
+ * Effective drain order as the selector actually sees it: computed from the
+ * stored config mode, then sorted by the on-disk priority each auth file
+ * carries (the selector's real input), not by the intended config priority.
+ */
+export interface EffectiveDrainOrder {
+  /** How the stored config intended to derive order. */
+  mode: EffectiveDrainOrderMode;
+  /**
+   * Entries in selector pick order (first = drained first), annotated with the
+   * on-disk priority via annotateCurrentPriorities().
+   */
+  entries: DrainOrderEntry[];
+  /**
+   * True when the computed config priority diverges from what is actually on
+   * disk for any account. Drift happens because re-auth rewrites the auth JSON
+   * and drops the priority attribute, and --reset leaves residual file
+   * priorities; under drift the selector follows the file, not the config.
+   */
+  hasDrift: boolean;
+}
+
+/**
+ * Resolve the effective drain order for a provider's active (non-paused)
+ * accounts, mirroring what `ccs cliproxy accounts order` shows and what the
+ * selector actually drains.
+ *
+ * Semantics (shared by the order subcommand and the quota pool section):
+ * 1. Pick the config mode (manual when stored ids still resolve, else tier when
+ *    stored, else file order).
+ * 2. annotateCurrentPriorities() to read the on-disk priority for each account.
+ * 3. Sort by currentPriority desc (undefined treated as 0, matching the
+ *    selector), tie-break by tieBreakKey(tokenFile) asc.
+ * 4. Flag drift when the computed config priority != on-disk priority anywhere.
+ *
+ * File mode never writes priorities, but it still honours any residual on-disk
+ * priority the selector reads (e.g. left by `order --reset`): it sorts by that
+ * priority desc then tieBreakKey asc, and flags drift when any residual is
+ * non-zero. With no residuals all priorities are 0 and it falls back to plain
+ * tieBreakKey order with no drift.
+ *
+ * @param activeAccounts Accounts in rotation (callers exclude paused accounts).
+ */
+export function resolveEffectiveDrainOrder(
+  provider: CLIProxyProvider,
+  activeAccounts: DrainOrderInput[]
+): EffectiveDrainOrder {
+  if (activeAccounts.length === 0) {
+    return { mode: 'file', entries: [], hasDrift: false };
+  }
+
+  const drainCfg = loadDrainOrderConfig(provider);
+
+  // Manual mode is only usable when at least one stored ID still maps to a live
+  // account. If every stored ID is stale, fall back to the file-order view.
+  let manualValidIds: string[] | undefined;
+  if (drainCfg?.mode === 'manual' && drainCfg.orderedIds && drainCfg.orderedIds.length > 0) {
+    const existingIds = new Set(activeAccounts.map((a) => a.accountId));
+    manualValidIds = drainCfg.orderedIds.filter((id) => existingIds.has(id));
+  }
+
+  let entries: DrainOrderEntry[];
+  let mode: EffectiveDrainOrderMode;
+
+  if (manualValidIds && manualValidIds.length > 0) {
+    entries = computeManualDrainOrder(manualValidIds, activeAccounts);
+    mode = 'manual';
+  } else if (drainCfg?.mode === 'tier') {
+    entries = computeTierDrainOrder(activeAccounts);
+    mode = 'tier';
+  } else {
+    // File order: config never writes priorities, so entries carry no computed
+    // priority. The selector still reads any residual on-disk priority (e.g.
+    // left behind by `order --reset`), so annotate, sort by that priority like
+    // the other modes, and flag drift when any residual is non-zero.
+    entries = activeAccounts.map((a) => ({
+      accountId: a.accountId,
+      tokenFile: a.tokenFile,
+      priority: MIN_PRIORITY,
+      tier: a.tier,
+      tierDerived: false,
+      currentPriority: undefined,
+    }));
+    annotateCurrentPriorities(entries);
+    const fileHasDrift = entries.some((e) => (e.currentPriority ?? 0) !== 0);
+    entries.sort(
+      (a, b) =>
+        (b.currentPriority ?? 0) - (a.currentPriority ?? 0) ||
+        (tieBreakKey(a.tokenFile) < tieBreakKey(b.tokenFile) ? -1 : 1)
+    );
+    return { mode: 'file', entries, hasDrift: fileHasDrift };
+  }
+
+  // Annotate on-disk priorities (the selector's real input) before sorting.
+  annotateCurrentPriorities(entries);
+
+  // Drift: computed config priority diverges from on-disk anywhere. Missing
+  // file priority (undefined) is treated as 0, matching the selector.
+  const hasDrift = entries.some((e) => (e.currentPriority ?? 0) !== e.priority);
+
+  // Sort by on-disk priority desc (undefined as 0), tie-break by tokenFile asc.
+  entries.sort(
+    (a, b) =>
+      (b.currentPriority ?? 0) - (a.currentPriority ?? 0) ||
+      (tieBreakKey(a.tokenFile) < tieBreakKey(b.tokenFile) ? -1 : 1)
+  );
+
+  return { mode, entries, hasDrift };
 }
