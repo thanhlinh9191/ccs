@@ -1636,6 +1636,11 @@ const resources = {
       githubLink: {
         title: 'Report an issue on GitHub',
       },
+      ccsBarButton: {
+        title: 'Open CCS Bar docs',
+        label: 'CCS Bar',
+        tooltip: 'Native macOS menu-bar quota, cost, and account controls',
+      },
       globalEnvIndicator: {
         injectedCount_one: '{{count}} global env var will be injected at runtime',
         injectedCount_other: '{{count}} global env vars will be injected at runtime',
@@ -2488,17 +2493,6 @@ const resources = {
       openrouterPromoCard: {
         title: 'OpenRouter',
         description: 'Access hundreds of models from one API endpoint.',
-      },
-      ccsBarBanner: {
-        new: 'NEW',
-        title: 'CCS Bar for macOS',
-        description: 'See live subscription quota and usage from your menu bar. Install with',
-        install: 'Install',
-      },
-      ccsBarPromo: {
-        title: 'CCS Bar (macOS)',
-        description: 'Live quota and usage in your menu bar.',
-        install: 'Install',
       },
       profileCard: {
         profile: 'Profile',
@@ -4285,6 +4279,11 @@ const resources = {
       },
       githubLink: {
         title: '在 GitHub 上报告问题',
+      },
+      ccsBarButton: {
+        title: '打开 CCS Bar 文档',
+        label: 'CCS Bar',
+        tooltip: '原生 macOS 菜单栏配额、成本和账号控制',
       },
       globalEnvIndicator: {
         injectedCount_one: '{{count}} 个全局环境变量将在运行时注入',
@@ -6983,6 +6982,11 @@ const resources = {
       },
       githubLink: {
         title: 'Báo cáo vấn đề trên GitHub',
+      },
+      ccsBarButton: {
+        title: 'Mở tài liệu CCS Bar',
+        label: 'CCS Bar',
+        tooltip: 'Điều khiển hạn mức, chi phí và tài khoản trên thanh menu macOS',
       },
       globalEnvIndicator: {
         injectedCount_one: '{{count}} biến env toàn cục sẽ được áp dụng khi chạy',
@@ -10665,6 +10669,11 @@ const resources = {
         title: 'GitHub でこのプロジェクトをスポンサー',
         sponsor: 'スポンサー',
       },
+      ccsBarButton: {
+        title: 'CCS Bar ドキュメントを開く',
+        label: 'CCS Bar',
+        tooltip: 'macOS メニューバーでクォータ、コスト、アカウントを確認',
+      },
       supportEntryCard: {
         actionRequired: '対応が必要',
       },
@@ -12430,6 +12439,11 @@ const resources = {
       },
       githubLink: {
         title: 'GitHub에서 이슈 보고',
+      },
+      ccsBarButton: {
+        title: 'CCS Bar 문서 열기',
+        label: 'CCS Bar',
+        tooltip: 'macOS 메뉴 막대에서 할당량, 비용, 계정 제어 확인',
       },
       globalEnvIndicator: {
         injectedCount_one: '런타임에 글로벌 환경 변수 {{count}}개가 주입됩니다',
