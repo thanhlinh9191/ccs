@@ -12,12 +12,14 @@
  *    by a direct atomic write; the running-proxy PATCH path is covered at the
  *    clearDrainOrderPriorities unit level (drain-order.test.ts).
  */
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { handleOrderSubcommand } from '../order-subcommand';
+mock.module('../../../cliproxy/proxy/proxy-detector', () => ({
+  detectRunningProxy: async () => ({ running: false, verified: false }),
+}));
 
 describe('handleOrderSubcommand', () => {
   let tempHome: string;
@@ -50,6 +52,13 @@ describe('handleOrderSubcommand', () => {
     saveDrainOrderConfig: (provider: string, config: unknown) => boolean;
   }> {
     return import(`../../../cliproxy/accounts/registry?order-subcommand=${Date.now()}`);
+  }
+
+  async function runOrderSubcommand(args: string[]): Promise<void> {
+    const { handleOrderSubcommand } = await import(
+      `../order-subcommand?order-subcommand=${Date.now()}`
+    );
+    await handleOrderSubcommand(args);
   }
 
   beforeEach(() => {
@@ -86,7 +95,7 @@ describe('handleOrderSubcommand', () => {
       registerAccount('claude', 'claude-a.json', 'a@x.com');
       registerAccount('claude', 'claude-b.json', 'b@x.com');
 
-      await handleOrderSubcommand(['claude']);
+      await runOrderSubcommand(['claude']);
 
       const output = lines.join('\n');
       // b@x.com (priority 5) must appear before a@x.com (priority 1).
@@ -113,7 +122,7 @@ describe('handleOrderSubcommand', () => {
       registerAccount('claude', 'claude-a.json', 'a@x.com');
       registerAccount('claude', 'claude-b.json', 'b@x.com');
 
-      await handleOrderSubcommand(['claude']);
+      await runOrderSubcommand(['claude']);
 
       const output = lines.join('\n');
       expect(output).toContain('no priority set');
@@ -131,7 +140,7 @@ describe('handleOrderSubcommand', () => {
       registerAccount('claude', 'claude-b.json', 'b@x.com');
       saveDrainOrderConfig('claude', { mode: 'manual', orderedIds: ['a@x.com', 'b@x.com'] });
 
-      await handleOrderSubcommand(['claude', '--reset']);
+      await runOrderSubcommand(['claude', '--reset']);
 
       // Residual priority is actually gone from disk (not just config deleted).
       expect('priority' in readAuthFile('claude-a.json')).toBe(false);
@@ -149,7 +158,7 @@ describe('handleOrderSubcommand', () => {
       const { registerAccount } = await registerClaude();
       registerAccount('claude', 'claude-a.json', 'a@x.com');
 
-      await handleOrderSubcommand(['claude', '--reset']);
+      await runOrderSubcommand(['claude', '--reset']);
 
       const output = lines.join('\n');
       expect(output).toContain('reset to file order');
