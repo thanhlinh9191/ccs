@@ -75,6 +75,8 @@ import {
   warnOAuthBanRisk,
   warnPossible403Ban,
 } from '../accounts/account-safety';
+import { maybeOfferPoolRouting } from '../routing/pool-opt-in-prompt';
+import { checkCrossLaneEmailOverlap } from '../accounts/account-safety-cross-lane';
 import { ensureCliAntigravityResponsibility } from '../auth/antigravity-responsibility';
 import { InteractivePrompt } from '../../utils/prompt';
 import { getCcsDir } from '../../utils/config-manager';
@@ -1133,6 +1135,8 @@ export async function triggerOAuth(
 
   // Check for existing accounts
   const existingAccounts = getProviderAccounts(provider);
+  // Capture count before registration for 1->2 transition detection
+  const accountCountBeforeAdd = existingAccounts.length;
   const existingNameMatch = nickname ? findAccountNameMatch(existingAccounts, nickname) : null;
   const targetAccountId = options.expectedAccountId || existingNameMatch?.id;
   const nicknameError = !fromUI
@@ -1363,6 +1367,38 @@ export async function triggerOAuth(
   }
 
   if (account) {
+    // Cross-lane overlap guard: warn if this account's email is also active
+    // in native Claude profiles (same account in two lanes is the documented ban vector).
+    if (account.email) {
+      checkCrossLaneEmailOverlap(provider, account.email);
+    }
+
+    // Pool routing opt-in: offer at the 1->2 account-add transition for verified providers.
+    // Only runs for local CLI sessions — skip when fromUI is true because the dashboard
+    // calls triggerOAuth from an HTTP request handler; the server may be running in a
+    // foreground terminal (ccs api / ccs dashboard) where process.stdin.isTTY is true,
+    // so reaching InteractivePrompt.confirm would block the HTTP request on the server's
+    // stdin and show the consent prompt to the wrong audience.
+    // Dashboard parity for the opt-in belongs to Phase 6.
+    if (!fromUI) {
+      try {
+        await maybeOfferPoolRouting(provider, accountCountBeforeAdd);
+      } catch (promptErr) {
+        // A regenerateConfig or prompt failure must not fail triggerOAuth after a
+        // successful account registration — the account is already registered.
+        logger.stage(
+          'auth',
+          'cliproxy.pool-prompt.error',
+          'Pool routing prompt failed (non-fatal)',
+          { provider },
+          { level: 'warn' }
+        );
+        if (process.env.CCS_DEBUG) {
+          console.error('[!] Pool routing prompt error (non-fatal):', promptErr);
+        }
+      }
+    }
+
     logger.stage(
       'auth',
       'cliproxy.oauth.success',

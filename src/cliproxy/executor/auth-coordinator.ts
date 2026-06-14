@@ -369,13 +369,17 @@ export function runAccountSafetyGuards(
  * Ensure provider model is configured on first run.
  * Skipped for composite variants and remote proxy mode.
  * Also reconciles Codex model for active plan.
+ *
+ * claude is model-neutral passthrough: the user's own /model selection inside
+ * Claude Code governs which model is used, so no auto-prompt at launch.
+ * Use `ccs claude --config` for an explicit pin opt-in.
  */
 export async function ensureModelConfiguration(
   provider: CLIProxyProvider,
   cfg: ExecutorConfig,
   verbose: boolean
 ): Promise<void> {
-  if (!cfg.isComposite && supportsModelConfig(provider)) {
+  if (!cfg.isComposite && provider !== 'claude' && supportsModelConfig(provider)) {
     await configureProviderModel(provider, false, cfg.customSettingsPath);
   }
 

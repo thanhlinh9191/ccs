@@ -103,6 +103,12 @@ beforeEach(() => {
       ANTHROPIC_MODEL: 'MiniMax-M2.7',
       CCS_DROID_PROVIDER: 'openai',
     }),
+    kimic: writeSettings('kimic', {
+      ANTHROPIC_BASE_URL: 'https://api.kimi.com/coding/',
+      ANTHROPIC_AUTH_TOKEN: 'kimi_token',
+      ANTHROPIC_MODEL: 'kimi-k2p7-coding',
+      CCS_DROID_PROVIDER: 'generic-chat-completion-api',
+    }),
   };
 
   fs.writeFileSync(
@@ -166,6 +172,152 @@ describe('attachDisconnectAbortHandlers', () => {
 });
 
 describe('handleProxyMessagesRequest', () => {
+  it('auto-passes through Kimi requests and preserves the coding-agent User-Agent', async () => {
+    const activeProfile = buildProfile('kimic');
+    let capturedInput: RequestInfo | URL | undefined;
+    let capturedInit: RequestInit | undefined;
+    const rawBody = JSON.stringify({
+      model: 'kimi-k2p7-coding',
+      max_tokens: 50,
+      messages: [{ role: 'user', content: 'Say hi in 2 words' }],
+    });
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInput = input;
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Hello there!' }],
+          model: 'kimi-k2p7-coding',
+          stop_reason: 'end_turn',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as typeof globalThis.fetch;
+
+    const req = new FakeRequest({
+      'x-api-key': 'local-token',
+      'user-agent': 'claude-cli/2.1.170',
+    });
+    const res = new FakeResponse();
+    const pending = handleProxyMessagesRequest(
+      req as never,
+      res as never,
+      activeProfile,
+      'local-token'
+    );
+    req.end(rawBody);
+    await pending;
+
+    expect(String(capturedInput)).toBe('https://api.kimi.com/coding/v1/messages');
+    expect(capturedInit?.body).toBe(rawBody);
+    expect((capturedInit?.headers as Record<string, string>)['User-Agent']).toBe(
+      'claude-cli/2.1.170'
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('uses routed-profile passthrough for explicit profile:model selectors', async () => {
+    const activeProfile = buildProfile('hf');
+    let capturedInput: RequestInfo | URL | undefined;
+    let capturedInit: RequestInit | undefined;
+    const rawBody = JSON.stringify({
+      model: 'kimic:kimi-k2p7-coding',
+      max_tokens: 50,
+      messages: [{ role: 'user', content: 'Say hi' }],
+    });
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInput = input;
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          id: 'msg_2',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Hi' }],
+          model: 'kimi-k2p7-coding',
+          stop_reason: 'end_turn',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as typeof globalThis.fetch;
+
+    const req = new FakeRequest({
+      'x-api-key': 'local-token',
+      'x-stainless-user-agent': 'claude-cli/2.1.170',
+    });
+    const res = new FakeResponse();
+    const pending = handleProxyMessagesRequest(
+      req as never,
+      res as never,
+      activeProfile,
+      'local-token'
+    );
+    req.end(rawBody);
+    await pending;
+
+    expect(String(capturedInput)).toBe('https://api.kimi.com/coding/v1/messages');
+    expect(capturedInit?.body).toBe(rawBody);
+    expect((capturedInit?.headers as Record<string, string>)['User-Agent']).toBe(
+      'claude-cli/2.1.170'
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('keeps default OpenAI-compatible requests on chat completions with CCS User-Agent', async () => {
+    const activeProfile = buildProfile('hf');
+    let capturedInput: RequestInfo | URL | undefined;
+    let capturedInit: RequestInit | undefined;
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInput = input;
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl_1',
+          object: 'chat.completion',
+          created: 1,
+          model: 'hf-default',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as typeof globalThis.fetch;
+
+    const req = new FakeRequest({
+      'x-api-key': 'local-token',
+      'user-agent': 'claude-cli/2.1.170',
+    });
+    const res = new FakeResponse();
+    const pending = handleProxyMessagesRequest(
+      req as never,
+      res as never,
+      activeProfile,
+      'local-token'
+    );
+    req.end(
+      JSON.stringify({
+        model: 'hf-default',
+        messages: [{ role: 'user', content: 'stay translated' }],
+      })
+    );
+    await pending;
+
+    expect(String(capturedInput)).toBe('https://router.huggingface.co/v1/chat/completions');
+    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+      model: 'hf-default',
+      messages: [{ role: 'user', content: 'stay translated' }],
+    });
+    expect((capturedInit?.headers as Record<string, string>)['User-Agent']).toBe(
+      'CCS-OpenAI-Compat-Proxy/1.0'
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
   it('uses a per-request insecure dispatcher for routed profiles and closes it on failure', async () => {
     const activeProfile = buildProfile('hf');
     const sharedDispatcher = { name: 'shared-insecure-dispatcher' } as never;

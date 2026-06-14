@@ -48,6 +48,8 @@ import {
   handleCatalogReset,
   handleCatalogJson,
 } from './catalog-subcommand';
+import { handlePoolSubcommand } from './pool-subcommand';
+import { handleOrderSubcommand } from './order-subcommand';
 
 /**
  * Parse --backend flag from args
@@ -183,6 +185,26 @@ export async function handleCliproxyCommand(args: string[]): Promise<void> {
       return;
     }
     await handleQuotaStatus(verbose, providerFilter);
+    return;
+  }
+
+  if (command === 'pool') {
+    await handlePoolSubcommand(remainingArgs.slice(1));
+    return;
+  }
+
+  if (command === 'accounts') {
+    const subcommand = remainingArgs[1];
+    if (subcommand === 'order') {
+      await handleOrderSubcommand(remainingArgs.slice(2));
+      return;
+    }
+    // Unknown (or missing) accounts subcommand: report and show help.
+    // 'order' is currently the only accounts subcommand.
+    console.error(`[X] Unknown accounts subcommand: ${subcommand ?? '(none)'}`);
+    console.error('    Usage: ccs cliproxy accounts order <provider>');
+    process.exitCode = 1;
+    await showHelp();
     return;
   }
 

@@ -116,6 +116,17 @@ Need the full setup path instead of the short version?
 
 ## See CCS In Action
 
+### CCS Bar For macOS
+
+![CCS Bar](assets/screenshots/ccs-bar-panel.webp)
+
+CCS Bar puts live subscription quota, daily spend, and account controls in the
+macOS menu bar. Install it with `ccs bar install`, launch it with `ccs bar`, and
+tell us what would make it more useful: issues and ideas are welcome in
+[GitHub Issues](https://github.com/kaitranntt/ccs/issues).
+
+Deep dive: [CCS Bar](https://docs.ccs.kaitran.ca/features/dashboard/ccs-bar).
+
 ### Usage Analytics
 
 ![Analytics Dashboard](assets/screenshots/analytics.webp)
@@ -164,6 +175,7 @@ reference material.
 | Install CCS cleanly on a new machine | [Installation](https://docs.ccs.kaitran.ca/getting-started/installation) |
 | Go from install to a successful first run | [Your First CCS Session](https://docs.ccs.kaitran.ca/getting-started/first-session) |
 | See the dashboard and workflow surfaces before setup | [Product Tour](https://docs.ccs.kaitran.ca/getting-started/product-tour) |
+| Install the native macOS menu-bar companion | [CCS Bar](https://docs.ccs.kaitran.ca/features/dashboard/ccs-bar) |
 | Compare OAuth providers, Claude accounts, and API profiles | [Provider Overview](https://docs.ccs.kaitran.ca/providers/concepts/overview) |
 | Learn the dashboard structure and feature pages | [Dashboard Overview](https://docs.ccs.kaitran.ca/features/dashboard/overview) |
 | Configure profiles, paths, and environment variables | [Configuration](https://docs.ccs.kaitran.ca/getting-started/configuration) |

@@ -67,6 +67,7 @@ import { resolveExecutorProxy, resolveExecutorProxyConfig } from './proxy-resolv
 import { buildProxyChain } from './proxy-chain-builder';
 import { warnBrokenModels } from './model-warnings';
 import { launchClaude } from './claude-launcher';
+import { maybeWarnClaudeShadow, maybeShowClaudeRoutingNotice } from '../claude-shadow-warning';
 
 /** Local alias so internal call sites need no change */
 const resolveRuntimeQuotaMonitorProviders = _resolveRuntimeQuotaMonitorProviders;
@@ -161,6 +162,11 @@ export async function execClaudeWithCLIProxy(
   const providerConfig = getProviderConfig(provider);
   log(`Provider: ${providerConfig.displayName}`);
 
+  // claude built-in: warn once if a user profile is being shadowed
+  if (provider === 'claude') {
+    maybeWarnClaudeShadow();
+  }
+
   // Variables for local proxy mode
   let sessionId: string | undefined;
 
@@ -224,6 +230,17 @@ export async function execClaudeWithCLIProxy(
       console.error(`    Use "ccs cliproxy edit ${variantName}" to modify composite variants`);
       process.exit(1);
     } else {
+      // Run the one-time stale-pin migration on the pre-existing settings file
+      // BEFORE writing the user's chosen pin. ensureProviderSettingsFile sets the
+      // migration marker, so the explicit --config pick survives the next launch
+      // even when it equals a historical default. Without this, the --config flow
+      // exits before the only ensureProviderSettingsFile call site (later in this
+      // function), so a later plain launch would strip the just-written pin.
+      // Skipped for custom-settings variants: those have no claude.settings
+      // migration and are written verbatim.
+      if (!cfg.customSettingsPath) {
+        ensureProviderSettingsFile(provider);
+      }
       await configureProviderModel(provider, true, cfg.customSettingsPath);
       process.exit(0);
     }
@@ -278,6 +295,11 @@ export async function execClaudeWithCLIProxy(
 
   // 5. Check for broken models (multi-tier for composite)
   warnBrokenModels({ provider, cfg, compositeProviders, skipLocalAuth });
+
+  // 5a. claude built-in: one-time routing notice (first launch only)
+  if (provider === 'claude') {
+    maybeShowClaudeRoutingNotice();
+  }
 
   // 6. Ensure user settings file exists
   ensureProviderSettingsFile(provider);

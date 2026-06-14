@@ -91,6 +91,12 @@ export function suggestCliproxyBridgeName(provider: CLIProxyProvider): string {
 }
 
 function resolveBridgeModelMapping(provider: CLIProxyProvider): ModelMapping {
+  // claude is model-neutral: model keys are absent from its base config so that
+  // Claude Code's own /model selection is respected end-to-end.  Return empty
+  // strings here; createSettingsFile skips writing empty model entries.
+  if (provider === 'claude') {
+    return { default: '', opus: '', sonnet: '', haiku: '' };
+  }
   const mapping = getModelMappingFromConfig(provider);
   return {
     default: mapping.defaultModel,

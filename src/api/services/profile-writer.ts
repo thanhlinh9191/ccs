@@ -109,6 +109,15 @@ function createSettingsFile(
   });
 
   const isNative = isAnthropicDirect(baseUrl, apiKey);
+  // Model-neutral providers (e.g. claude built-in) pass empty strings to signal
+  // "omit this key".  Filter them out so the written settings file does not
+  // contain ANTHROPIC_MODEL:'' which could be treated as an unintended override.
+  const modelEnv = {
+    ...(models.default.trim() ? { ANTHROPIC_MODEL: models.default } : {}),
+    ...(models.opus.trim() ? { ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus } : {}),
+    ...(models.sonnet.trim() ? { ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet } : {}),
+    ...(models.haiku.trim() ? { ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku } : {}),
+  };
   const settings = {
     env: {
       // Native mode: ANTHROPIC_API_KEY only, no BASE_URL/AUTH_TOKEN
@@ -120,10 +129,7 @@ function createSettingsFile(
             ANTHROPIC_AUTH_TOKEN: apiKey,
             ...(isOpenRouterUrl(baseUrl) && { ANTHROPIC_API_KEY: '' }),
           }),
-      ANTHROPIC_MODEL: models.default,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
+      ...modelEnv,
       ...(extraModels && extraModels.length > 0
         ? { ANTHROPIC_EXTRA_MODELS: extraModels.join(',') }
         : {}),
@@ -202,6 +208,13 @@ function createApiProfileUnified(
   });
 
   const isNative = isAnthropicDirect(baseUrl, apiKey);
+  // Model-neutral providers pass empty strings; omit those keys.
+  const modelEnvUnified = {
+    ...(models.default.trim() ? { ANTHROPIC_MODEL: models.default } : {}),
+    ...(models.opus.trim() ? { ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus } : {}),
+    ...(models.sonnet.trim() ? { ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet } : {}),
+    ...(models.haiku.trim() ? { ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku } : {}),
+  };
   const settings = {
     env: {
       ...(isNative
@@ -211,10 +224,7 @@ function createApiProfileUnified(
             ANTHROPIC_AUTH_TOKEN: apiKey,
             ...(isOpenRouterUrl(baseUrl) && { ANTHROPIC_API_KEY: '' }),
           }),
-      ANTHROPIC_MODEL: models.default,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
+      ...modelEnvUnified,
       ...(extraModels && extraModels.length > 0
         ? { ANTHROPIC_EXTRA_MODELS: extraModels.join(',') }
         : {}),

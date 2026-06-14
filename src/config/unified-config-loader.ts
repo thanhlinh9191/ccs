@@ -191,6 +191,9 @@ export function loadUnifiedConfig(): UnifiedConfig | null {
  * Merges with defaults to ensure all sections exist.
  */
 export function loadOrCreateUnifiedConfig(): UnifiedConfig {
+  // Read-only: "create" means an in-memory default object when config.yaml is
+  // absent. This never writes to disk, so callers on legacy installs can use
+  // it for read paths without implicitly creating config.yaml.
   const existing = loadUnifiedConfig();
   if (existing) {
     const merged = mergeWithDefaults(existing);

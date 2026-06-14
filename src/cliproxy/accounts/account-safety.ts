@@ -112,6 +112,37 @@ function loadQuotaPaused(): QuotaPausedFile {
   return { entries: [] };
 }
 
+/**
+ * Read-only view of a persisted quota-cooldown pause.
+ * Exposed for visibility surfaces (e.g. `ccs cliproxy quota` pool section)
+ * that must distinguish a quota cooldown (with a reset time) from a manual pause.
+ */
+export interface QuotaCooldownEntry {
+  provider: CLIProxyProvider;
+  accountId: string;
+  /** ISO timestamp when the account was paused (matches AccountInfo.pausedAt) */
+  pausedAt: string;
+  /** Epoch ms when the cooldown is eligible to be lifted */
+  until: number;
+  reason: 'quota_exhausted';
+}
+
+/**
+ * Return the persisted quota-cooldown pauses recorded on disk.
+ *
+ * This is the cross-process source of truth for quota cooldowns: the in-memory
+ * cooldown map in quota-manager is process-local, but quota-paused.json is
+ * written by the long-lived proxy/monitor process and read by short-lived CLI
+ * invocations. Callers use it to label an account as cooling (vs manually
+ * paused) and to show the reset time.
+ *
+ * Entries are returned as-is (including expired ones); callers decide whether to
+ * treat `until <= now` as already cooled down.
+ */
+export function readQuotaCooldownEntries(): QuotaCooldownEntry[] {
+  return loadQuotaPaused().entries.map((entry) => ({ ...entry }));
+}
+
 function saveQuotaPaused(data: QuotaPausedFile): void {
   const filePath = getQuotaPausedPath();
   if (data.entries.length === 0) {
@@ -568,8 +599,9 @@ export function restoreAutoPausedAccounts(provider: CLIProxyProvider): void {
   saveAutoPaused(data);
 }
 
-// Error patterns that indicate Google has disabled/banned an account
-const BAN_PATTERNS = [
+// Error patterns that indicate a provider has disabled/banned an account.
+// Shared patterns apply to all providers (Google and Anthropic OAuth flows).
+const SHARED_BAN_PATTERNS = [
   'disabled in this account',
   'violation of terms of service',
   'account has been disabled',
@@ -578,12 +610,28 @@ const BAN_PATTERNS = [
   'account has been banned',
 ];
 
+// Anthropic-specific disable patterns.  Only applied when provider === 'claude'
+// to avoid false-positive auto-pause on Google/Codex errors that may reference
+// "policy" in rate-limit or scope messages.
+const ANTHROPIC_BAN_PATTERNS = ['your account has been blocked', 'account is blocked'];
+
 /**
  * Check if an error message indicates an account ban/disable.
+ * Pass the provider so Anthropic-only patterns cannot trip Google providers.
  */
-export function isBanResponse(errorMessage: string): boolean {
+export function isBanResponse(errorMessage: string, provider?: CLIProxyProvider): boolean {
   const lower = errorMessage.toLowerCase();
-  return BAN_PATTERNS.some((pattern) => lower.includes(pattern));
+  if (SHARED_BAN_PATTERNS.some((pattern) => lower.includes(pattern))) return true;
+  if (provider === 'claude' && ANTHROPIC_BAN_PATTERNS.some((pattern) => lower.includes(pattern))) {
+    return true;
+  }
+  return false;
+}
+
+/** Return the actor name (Google, Anthropic, etc.) for ban copy. */
+function banActor(provider: CLIProxyProvider): string {
+  if (provider === 'claude') return 'Anthropic';
+  return 'Google';
 }
 
 /**
@@ -595,10 +643,11 @@ export function handleBanDetection(
   accountId: string,
   errorMessage: string
 ): boolean {
-  if (!isBanResponse(errorMessage)) return false;
+  if (!isBanResponse(errorMessage, provider)) return false;
 
+  const actor = banActor(provider);
   console.error('');
-  console.error(warn('Account safety: account appears disabled by Google'));
+  console.error(warn(`Account safety: account appears disabled by ${actor}`));
   console.error(`    Account "${maskEmail(accountId)}" (${provider}) returned:`);
   console.error(`    "${truncate(errorMessage, 120)}"`);
   console.error('');

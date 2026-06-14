@@ -231,6 +231,7 @@ export class DeltaAccumulator {
     if (usage) {
       this.inputTokens = usage.prompt_tokens || usage.input_tokens || 0;
       this.outputTokens = usage.completion_tokens || usage.output_tokens || 0;
+      this.usageReceived = true;
     }
   }
 
