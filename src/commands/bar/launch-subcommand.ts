@@ -1,21 +1,47 @@
 /**
- * `ccs bar launch` — ensure web-server is up, write ~/.ccs/bar.json, open the app.
+ * `ccs bar launch` — start the CCS Bar server detached, write bar.json, open the app.
  *
  * bar.json shape (v1):
  *   { baseUrl: string, port: number, authMode: "loopback" }
  *
- * authMode is always "loopback" for v1 (auth-enabled unsupported until v1.1).
+ * Detached model (replaces the old in-process model):
+ *   1. Probe candidate ports (bar.json port first, then 3000/3001/3002/8000/8080).
+ *   2. If a live server is found → reuse it, write bar.json, open app, return.
+ *   3. Else → refresh launch.json, getPort to pick a free port, spawn
+ *      `ccs bar serve --port N` detached with stdio → serve.log, poll
+ *      /api/bar/summary until 200 (timeout ~10 s), write bar.json, open app,
+ *      return. The CLI process exits; the server continues as a detached child.
  *
- * Reuse-first behavior: before starting a new server, launch probes the candidate
- * ports (bar.json port first, then 3000, 3001, 3002, 8000, 8080) for a live CCS
- * server at GET /api/bar/summary. A 200 response means the server is already
- * running; launch reuses it without attempting to bind a new one.
+ * All side-effectful deps are injectable so tests can run without real
+ * servers, ports, or file-system writes.
  */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getCcsDir } from '../../config/config-loader-facade';
+import {
+  getBarDir,
+  getBarJsonPath,
+  getLaunchJsonPath,
+  getServeLogPath,
+  LAUNCH_JSON_SCHEMA,
+} from './bar-paths';
+import type { LaunchJson } from './bar-paths';
+import {
+  defaultFindRunningServer as _defaultFindRunningServer,
+  resolveBarPort as _resolveBarPort,
+} from './bar-server-probe';
+import type { DashboardInfo as _DashboardInfo } from './bar-server-probe';
+
+// ---------------------------------------------------------------------------
+// Re-exports — backward compat for tests that import from this module.
+// resolveBarPort + defaultFindRunningServer are canonical in bar-server-probe.ts;
+// we re-export them so existing imports from launch-subcommand continue to work.
+// ---------------------------------------------------------------------------
+
+export { _defaultFindRunningServer as defaultFindRunningServer };
+export { _resolveBarPort as resolveBarPort };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,10 +53,7 @@ export interface BarDiscoveryJson {
   authMode: 'loopback';
 }
 
-export interface DashboardInfo {
-  port: number;
-  baseUrl: string;
-}
+export type DashboardInfo = _DashboardInfo;
 
 export interface LaunchDeps {
   /**
@@ -40,11 +63,24 @@ export interface LaunchDeps {
    */
   findRunningServer: () => Promise<DashboardInfo | null>;
   /**
-   * Ensure the CCS web-server / dashboard is running.
-   * Returns { port, baseUrl } of the running server.
-   * Throws if the server cannot be started (degraded path).
+   * Find a free port from the candidate list.
+   * Used to pre-select a port before spawning the detached server.
    */
-  ensureDashboard: () => Promise<DashboardInfo>;
+  getPort: (opts: { port: number[]; host: string }) => Promise<number>;
+  /**
+   * Spawn the `ccs bar serve --port N` process detached and return immediately.
+   * The spawned process must be unref()ed so the launcher can exit.
+   */
+  spawnDetachedServer: (port: number, logPath: string) => void;
+  /**
+   * Poll GET {baseUrl}/api/bar/summary until HTTP 200 or timeout.
+   * Returns the live baseUrl on success, throws on timeout.
+   */
+  waitForServerLive: (baseUrl: string) => Promise<void>;
+  /**
+   * Write launch.json so the Swift app can spawn the server independently.
+   */
+  writeLaunchDescriptor: (jsonPath: string, descriptor: LaunchJson) => void;
   /** Open the installed .app bundle. Throws if the app is not found. */
   openApp: (appPath: string) => Promise<void>;
   /** Returns path to ~/.ccs (respects CCS_HOME for test isolation). */
@@ -54,113 +90,67 @@ export interface LaunchDeps {
 }
 
 // ---------------------------------------------------------------------------
-// Port discovery helpers (exported for unit tests)
-// ---------------------------------------------------------------------------
-
-/**
- * Read the port recorded in an existing bar.json.
- * Returns null when the file is absent or malformed.
- */
-export function resolveBarPort(ccsDir: string): number | null {
-  const barJsonPath = path.join(ccsDir, 'bar.json');
-  try {
-    const raw = fs.readFileSync(barJsonPath, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<BarDiscoveryJson>;
-    return typeof parsed.port === 'number' ? parsed.port : null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Default production dependencies
 // ---------------------------------------------------------------------------
 
-/**
- * Probe candidate ports for a running CCS server.
- *
- * Both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses are probed for
- * each port. This is necessary because `ccs config` starts the server with
- * host 'localhost', which macOS resolves to ::1 — an IPv4-only probe would
- * miss that server and start a redundant second instance.
- *
- * All probes are fired concurrently (cheap loopback requests) so worst-case
- * latency is ~1.5 s (one timeout) rather than N × 1.5 s sequentially.
- * Priority selection is still applied after all results are in: the bar.json
- * port is preferred over the defaults (3000, 3001, 3002, 8000, 8080), and
- * within a port 127.0.0.1 is preferred over [::1].
- */
-export async function defaultFindRunningServer(ccsDir: string): Promise<DashboardInfo | null> {
-  const { request } = await import('undici');
+async function defaultGetPort(opts: { port: number[]; host: string }): Promise<number> {
+  const getPort = (await import('get-port')).default;
+  return getPort(opts);
+}
 
-  /**
-   * Probe a single URL. Resolves to { ok: true } on HTTP 200, { ok: false }
-   * on any other status or error (connection refused, timeout, etc.).
-   * Never rejects — all errors are absorbed so Promise.all never short-circuits.
-   */
-  async function probe(url: string): Promise<{ ok: boolean }> {
+/**
+ * Spawn `ccs bar serve --port N` detached so it outlives this CLI process.
+ *
+ * stdio is redirected to serve.log so server output is preserved for
+ * debugging without a terminal.  unref() lets the launcher exit immediately.
+ */
+function defaultSpawnDetachedServer(port: number, logPath: string): void {
+  const { spawn } = require('child_process') as typeof import('child_process');
+
+  // Open (or create) the log file for appending.
+  const logFd = fs.openSync(logPath, 'a');
+  const child = spawn(process.execPath, [process.argv[1], 'bar', 'serve', '--port', String(port)], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    cwd: os.homedir(),
+    env: process.env,
+  });
+  child.unref();
+  // Close our copy of the fd — the child has its own reference.
+  fs.closeSync(logFd);
+}
+
+/**
+ * Poll GET {baseUrl}/api/bar/summary every 250 ms until HTTP 200 or ~10 s.
+ * Resolves when the server is live. Rejects on timeout.
+ */
+async function defaultWaitForServerLive(baseUrl: string): Promise<void> {
+  const { request } = await import('undici');
+  const INTERVAL_MS = 250;
+  const TIMEOUT_MS = 10_000;
+  const deadline = Date.now() + TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
     try {
-      const { statusCode, body } = await request(url, {
+      const { statusCode, body } = await request(`${baseUrl}/api/bar/summary`, {
         method: 'GET',
         headersTimeout: 1500,
         bodyTimeout: 1500,
       });
-      // Drain the body to avoid hanging sockets regardless of status.
-      // body.dump() is not available in Bun's undici shim; body.text() works
-      // cross-runtime and fully consumes the response stream.
       await body.text();
-      return { ok: statusCode === 200 };
+      if (statusCode === 200) return;
     } catch {
-      return { ok: false };
+      /* not yet live — keep polling */
     }
+    await new Promise<void>((resolve) => setTimeout(resolve, INTERVAL_MS));
   }
 
-  const barJsonPort = resolveBarPort(ccsDir);
-  const base = [3000, 3001, 3002, 8000, 8080];
-  const candidates: number[] =
-    barJsonPort !== null ? [barJsonPort, ...base.filter((p) => p !== barJsonPort)] : base;
-
-  // Build the ordered list of (port, host, baseUrl) tuples. Within each port,
-  // IPv4 comes before IPv6 to preserve the existing priority semantics.
-  const probeTargets = candidates.flatMap((port) => [
-    { port, baseUrl: `http://127.0.0.1:${port}`, url: `http://127.0.0.1:${port}/api/bar/summary` },
-    { port, baseUrl: `http://[::1]:${port}`, url: `http://[::1]:${port}/api/bar/summary` },
-  ]);
-
-  // Fire all probes concurrently. Each probe resolves (never rejects), so
-  // Promise.all collects all results without short-circuiting on failure.
-  const results = await Promise.all(probeTargets.map((t) => probe(t.url)));
-
-  // Walk the results in priority order and return the first successful hit.
-  for (let i = 0; i < probeTargets.length; i++) {
-    if (results[i].ok) {
-      const { port, baseUrl } = probeTargets[i];
-      return { port, baseUrl };
-    }
-  }
-  return null;
+  throw new Error(`CCS Bar server did not become live at ${baseUrl} within ${TIMEOUT_MS / 1000}s`);
 }
 
-async function defaultEnsureDashboard(): Promise<DashboardInfo> {
-  // Reuse the same startup path as `ccs config`:
-  // find a free port then start the web-server via startServer().
-  const getPort = (await import('get-port')).default;
-  const { startServer } = await import('../../web-server');
-
-  // Pass host: '127.0.0.1' so getPort probes the same address that startServer
-  // will bind. On macOS, a wildcard bind and a specific 127.0.0.1 bind are
-  // independent: getPort without a host can return 3000 "free" while a live
-  // CCS server already holds 127.0.0.1:3000, causing EADDRINUSE on startServer.
-  const port = await getPort({ port: [3000, 3001, 3002, 8000, 8080], host: '127.0.0.1' });
-  // Bind IPv4 loopback explicitly. Without a host, startServer defaults to
-  // 'localhost', which on macOS resolves to ::1 (IPv6) — but bar.json's baseUrl
-  // (and the Swift app) use 127.0.0.1, so the app could not reach its own server.
-  const { server } = await startServer({ port, host: '127.0.0.1' });
-
-  const addr = server.address();
-  const resolvedPort = addr && typeof addr === 'object' ? addr.port : port;
-  const baseUrl = `http://127.0.0.1:${resolvedPort}`;
-  return { port: resolvedPort, baseUrl };
+function defaultWriteLaunchDescriptor(jsonPath: string, descriptor: LaunchJson): void {
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+  fs.writeFileSync(jsonPath, JSON.stringify(descriptor, null, 2));
 }
 
 async function defaultOpenApp(appPath: string): Promise<void> {
@@ -175,8 +165,6 @@ function defaultGetCcsDir(): string {
 }
 
 // Fix #5: use os.homedir() to match install-subcommand.ts and uninstall-subcommand.ts.
-// process.env.HOME may be unset in restricted environments, and CCS_HOME is the CCS
-// data directory (~/.ccs), not the user's home — neither is a safe fallback here.
 const DEFAULT_APP_INSTALL_PATH = path.join(os.homedir(), 'Applications', 'CCS Bar.app');
 
 // ---------------------------------------------------------------------------
@@ -187,69 +175,136 @@ export async function handleBarLaunch(
   _args: string[],
   deps: Partial<LaunchDeps> = {}
 ): Promise<void> {
-  const ensureDashboard = deps.ensureDashboard ?? defaultEnsureDashboard;
-  const openApp = deps.openApp ?? defaultOpenApp;
   const ccsDir = (deps.getCcsDir ?? defaultGetCcsDir)();
+  const openApp = deps.openApp ?? defaultOpenApp;
   const appInstallPath = deps.appInstallPath ?? DEFAULT_APP_INSTALL_PATH;
+  const getPortFn = deps.getPort ?? defaultGetPort;
+  const spawnDetachedServer = deps.spawnDetachedServer ?? defaultSpawnDetachedServer;
+  const waitForServerLive = deps.waitForServerLive ?? defaultWaitForServerLive;
+  const writeLaunchDescriptor = deps.writeLaunchDescriptor ?? defaultWriteLaunchDescriptor;
 
-  // Wire findRunningServer after ccsDir is resolved so the default impl can
-  // read bar.json from the correct directory.
-  const findRunningServer = deps.findRunningServer ?? (() => defaultFindRunningServer(ccsDir));
+  // Wire findRunningServer after ccsDir is resolved.
+  const findRunningServer = deps.findRunningServer ?? (() => _defaultFindRunningServer(ccsDir));
 
-  // 1. Try to reuse an already-running CCS server; fall back to starting one.
-  // Probe errors are treated as "not found" — they never abort the launch flow.
+  const barJsonPath = getBarJsonPath(ccsDir);
+  const launchJsonPath = getLaunchJsonPath(ccsDir);
+
+  // 1. Probe for an already-running server.
   let running: DashboardInfo | null = null;
   try {
     running = await findRunningServer();
   } catch {
-    // Any probe error counts as null; ensureDashboard() is the fallback.
+    /* any probe error counts as null */
   }
 
-  let dashboardInfo: DashboardInfo;
-  let reused = false;
   if (running !== null) {
-    dashboardInfo = running;
-    reused = true;
-  } else {
+    // Reuse the live server — write bar.json and open the app.
+    const barJson: BarDiscoveryJson = {
+      baseUrl: running.baseUrl,
+      port: running.port,
+      authMode: 'loopback',
+    };
     try {
-      dashboardInfo = await ensureDashboard();
+      fs.mkdirSync(ccsDir, { recursive: true });
+      fs.writeFileSync(barJsonPath, JSON.stringify(barJson, null, 2));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[X] Could not start CCS web-server: ${msg}`);
-      console.error('[i] Run `ccs config` to start the dashboard manually.');
+      console.error(`[X] Failed to write bar.json: ${msg}`);
       return;
     }
+    console.log(`[OK] Reusing running CCS web-server at ${running.baseUrl}`);
+    console.log(`[i]  Discovery file written: ${barJsonPath}`);
+    await _openAppWithFallback(appInstallPath, openApp);
+    return;
   }
 
-  // 2. Write bar.json — this is the single source of discovery for the Swift app.
+  // 2. No live server — pick a port, write/refresh launch.json, spawn detached.
+
+  // 2a. Pick a free port.
+  let port: number;
+  try {
+    port = await getPortFn({ port: [3000, 3001, 3002, 8000, 8080], host: '127.0.0.1' });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[X] Could not find a free port: ${msg}`);
+    return;
+  }
+
+  // 2b. Write/refresh launch.json so the Swift app can self-start next time.
+  const launchDescriptor: LaunchJson = {
+    schema: LAUNCH_JSON_SCHEMA,
+    runtime: process.execPath,
+    args: [process.argv[1], 'bar', 'serve'],
+    home: os.homedir(),
+    ...(process.env.CCS_HOME ? { ccsHome: process.env.CCS_HOME } : {}),
+  };
+  try {
+    writeLaunchDescriptor(launchJsonPath, launchDescriptor);
+  } catch (err) {
+    // Non-fatal — the Swift app falls back to resolving `ccs` via PATH.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[!] Could not write launch.json: ${msg}`);
+  }
+
+  // 2c. Spawn the detached server.
+  const serveLogPath = getServeLogPath(ccsDir);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    fs.mkdirSync(getBarDir(ccsDir), { recursive: true });
+    spawnDetachedServer(port, serveLogPath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[X] Could not start CCS web-server: ${msg}`);
+    console.error('[i] Run `ccs config` to start the dashboard manually.');
+    return;
+  }
+
+  console.log('[i] Starting CCS Bar server...');
+
+  // 2d. Poll until live or timeout.
+  try {
+    await waitForServerLive(baseUrl);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[X] Could not connect to CCS web-server: ${msg}`);
+    console.error(`[i] Check logs at ${serveLogPath}`);
+    return;
+  }
+
+  // 2e. Write bar.json.
   const barJson: BarDiscoveryJson = {
-    baseUrl: dashboardInfo.baseUrl,
-    port: dashboardInfo.port,
+    baseUrl,
+    port,
     authMode: 'loopback',
   };
-
   try {
     fs.mkdirSync(ccsDir, { recursive: true });
-    fs.writeFileSync(path.join(ccsDir, 'bar.json'), JSON.stringify(barJson, null, 2));
+    fs.writeFileSync(barJsonPath, JSON.stringify(barJson, null, 2));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[X] Failed to write bar.json: ${msg}`);
     return;
   }
 
-  if (reused) {
-    console.log(`[OK] Reusing running CCS web-server at ${dashboardInfo.baseUrl}`);
-  } else {
-    console.log(`[OK] CCS web-server running at ${dashboardInfo.baseUrl}`);
-  }
-  console.log(`[i]  Discovery file written: ${path.join(ccsDir, 'bar.json')}`);
+  console.log(`[OK] CCS web-server running at ${baseUrl}`);
+  console.log(`[i]  Discovery file written: ${barJsonPath}`);
 
-  // 3. Open the app.
+  // 3. Open the app — then return (process exits; server continues detached).
+  await _openAppWithFallback(appInstallPath, openApp);
+}
+
+// ---------------------------------------------------------------------------
+// Internal helper — open app with graceful degraded path
+// ---------------------------------------------------------------------------
+
+async function _openAppWithFallback(
+  appInstallPath: string,
+  openApp: (p: string) => Promise<void>
+): Promise<void> {
   try {
     await openApp(appInstallPath);
     console.log('[OK] CCS Bar launched.');
   } catch {
-    // Degraded path: app not installed or open failed.
     if (!fs.existsSync(appInstallPath)) {
       console.log('[!] CCS Bar app is not installed.');
       console.log('[i] Run `ccs bar install` to install it.');

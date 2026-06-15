@@ -2,6 +2,21 @@ import SwiftUI
 import AppKit
 import CCSBarCore
 
+// MARK: - Content height preference key
+
+/// Preference key used to bubble the measured content VStack height up to the
+/// ScrollView parent without a feedback loop. The reduction takes the MAX so
+/// that intermediate layout passes that report a smaller size don't cause the
+/// frame to shrink, which would trigger another layout pass (the classic
+/// GeometryReader loop). A `@State` var is updated only when the value changes,
+/// keeping SwiftUI's diffing stable.
+private struct ContentHeightKey: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
+  }
+}
+
 /// Dropdown content for the menu bar: a CCS-branded header, usage analytics,
 /// per-account rows + actions, an offline state when CCS isn't running, and
 /// footer controls.
@@ -16,13 +31,36 @@ struct BarMenuView: View {
   /// no modal, no .confirmationDialog (those steal focus and dismiss the popover,
   /// the exact fragility of BUG 1).
   @State private var quitArmed = false
+  /// Measured height of the scroll content VStack, updated via preference key.
+  /// Starts at 0; the preference fires on the first layout pass and grows
+  /// monotonically (ContentHeightKey.reduce takes the max), so the frame never
+  /// thrashes downward.
+  @State private var contentHeight: CGFloat = 0
+
+  // MARK: - Screen cap
+
+  /// Maximum height the scroll area may occupy: screen visible height minus space
+  /// for the macOS menu bar, the CCS Bar header, footer, and a small safety margin.
+  /// Clamped to a floor of 240 so the popover is always usable even on tiny displays.
+  private var screenCap: CGFloat {
+    let visibleHeight = NSScreen.main?.visibleFrame.height ?? 800
+    return max(240, visibleHeight - 120)
+  }
+
+  /// The resolved scroll-area height: the smaller of measured content and the cap.
+  /// Content shorter than the cap renders FULLY with no scroll bar.
+  /// Content taller than the cap scrolls.
+  private var scrollAreaHeight: CGFloat {
+    guard contentHeight > 0 else { return screenCap }
+    return min(contentHeight, screenCap)
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
       Divider()
 
-      if viewModel.offline {
+      if viewModel.offline || viewModel.isStarting {
         offlineState.padding(14)
       } else {
         // The scroll indicator is suppressed (.never, not just .hidden) AND the
@@ -78,12 +116,30 @@ struct BarMenuView: View {
             ScrollerHider().frame(width: 0, height: 0)
           }
           .padding(14)
+          // Measure the content height via a background GeometryReader that
+          // reports into ContentHeightKey. Using .background keeps the reader
+          // out of the layout pass that sizes the VStack itself, avoiding the
+          // classic GeometryReader-inside-ScrollView feedback loop.
+          .background(
+            GeometryReader { geo in
+              Color.clear
+                .preference(key: ContentHeightKey.self, value: geo.size.height)
+            }
+          )
         }
         .scrollIndicators(.never)
-        // 700 gives more vertical breathing room before scroll engages — useful
-        // for 3-4 subscription cards each carrying multiple quota windows.
-        // Scroll still engages gracefully on genuine overflow.
-        .frame(maxHeight: 700)
+        // Deterministic height: exactly the content size up to the screen cap.
+        // Content shorter than the cap renders FULLY (no empty space, no clip).
+        // Content taller scrolls. contentHeight starts at 0 so we show screenCap
+        // until the first preference fires.
+        .frame(height: scrollAreaHeight)
+        .onPreferenceChange(ContentHeightKey.self) { measured in
+          // Only grow, never shrink — prevents a feedback loop where a smaller
+          // frame triggers a re-layout that reports an even smaller height.
+          if measured > contentHeight {
+            contentHeight = measured
+          }
+        }
       }
 
       Divider()
@@ -205,15 +261,51 @@ struct BarMenuView: View {
     .padding(.vertical, 10)
   }
 
-  private var offlineState: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Label("CCS is not running", systemImage: "bolt.slash.fill")
-        .font(.body)
-      Text("Start CCS, then reopen this menu.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      Button("Retry") { viewModel.reconnect(); viewModel.onOpen() }
-        .controlSize(.small)
+  /// Offline / starting state view. Two sub-states:
+  ///
+  /// **Starting** (`isStarting == true`): server launch is in progress. Shows a
+  /// spinner row so the user knows something is happening. No action needed.
+  ///
+  /// **Truly offline** (`offline == true`, `isStarting == false`): server is not
+  /// running and no launch is in progress. Shows a primary "Start CCS" button
+  /// that triggers the launcher + poll sequence, a secondary "Retry" that
+  /// re-probes without launching, and a guidance caption.
+  ///
+  /// All controls remain inside the popover — NO sheets, modals, or
+  /// .confirmationDialog (those steal focus and auto-dismiss the MenuBarExtra,
+  /// the known constraint noted throughout BarMenuView).
+  @ViewBuilder private var offlineState: some View {
+    if viewModel.isStarting {
+      // Starting state: spinner + label. Primary action is implicit (wait).
+      HStack(spacing: 8) {
+        ProgressView()
+          .controlSize(.small)
+        Text("Starting CCS…")
+          .font(.body)
+          .foregroundStyle(.secondary)
+      }
+    } else {
+      // Truly offline state: actionable controls.
+      VStack(alignment: .leading, spacing: 8) {
+        Label("CCS is not running", systemImage: "bolt.slash.fill")
+          .font(.body)
+        Text("Start CCS, then the menu will connect automatically.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+          // Primary: launches the server (reads launch.json or falls back to ccs on PATH).
+          Button("Start CCS") {
+            viewModel.startCCS()
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          // Secondary: re-probe only (no launch attempt).
+          Button("Retry") {
+            viewModel.onOpen()
+          }
+          .controlSize(.small)
+        }
+      }
     }
   }
 

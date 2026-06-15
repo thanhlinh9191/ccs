@@ -2,7 +2,11 @@
  * `ccs bar` command dispatcher
  *
  * Mirrors the pattern in src/commands/docker/index.ts.
- * Subcommands: launch (default), install, uninstall, version / --version, help / --help / -h.
+ * Subcommands: launch (default), serve, stop, status, install, uninstall,
+ *              version / --version, help / --help / -h.
+ *
+ * `serve` is the long-lived server host (spawned detached by `launch` and by
+ * the Swift app). `stop` and `status` manage the detached server lifecycle.
  */
 
 import { hasAnyFlag } from '../arg-extractor';
@@ -11,7 +15,6 @@ export async function handleBarCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
 
   // --help / -h anywhere in args (e.g. `ccs bar install --help`) → show help.
-  // Mirrors docker/index.ts: hasAnyFlag(normalizedArgs, ['--help', '-h']).
   // Also dispatch bare `help` subcommand for symmetry.
   if (hasAnyFlag(args, ['--help', '-h']) || subcommand === 'help') {
     const { showHelp } = await import('./help-subcommand');
@@ -30,6 +33,18 @@ export async function handleBarCommand(args: string[]): Promise<void> {
     launch: async (subArgs) => {
       const { handleBarLaunch } = await import('./launch-subcommand');
       await handleBarLaunch(subArgs);
+    },
+    serve: async (subArgs) => {
+      const { handleBarServe } = await import('./serve-subcommand');
+      await handleBarServe(subArgs);
+    },
+    stop: async (subArgs) => {
+      const { handleBarStop } = await import('./stop-subcommand');
+      await handleBarStop(subArgs);
+    },
+    status: async (subArgs) => {
+      const { handleBarStatus } = await import('./status-subcommand');
+      await handleBarStatus(subArgs);
     },
     install: async (subArgs) => {
       const { handleBarInstall } = await import('./install-subcommand');
@@ -50,7 +65,7 @@ export async function handleBarCommand(args: string[]): Promise<void> {
   const handler = commandHandlers[subcommand];
   if (!handler) {
     console.error(`[X] Unknown bar subcommand: ${subcommand}`);
-    console.error('[i] Usage: ccs bar [launch|install|uninstall|version|--help]');
+    console.error('[i] Usage: ccs bar [launch|serve|stop|status|install|uninstall|version|--help]');
     return;
   }
 

@@ -1445,6 +1445,188 @@ check(BarVersionDisplay.displayString(for: "2.0.0") == "v2.0.0", "version '2.0.0
 // Outside a bundle, string() must not crash and returns nil (no assertion on value — bundle absent).
 let _ = BarVersionDisplay.string()
 
+// MARK: - BarLaunchDescriptor JSON decoding
+
+// (L1) Full descriptor with ccsHome round-trips correctly.
+do {
+  let json = """
+  {
+    "schema": 1,
+    "runtime": "/usr/local/bin/node",
+    "args": ["/home/kai/.ccs/bin/ccs.js", "bar", "serve"],
+    "home": "/home/kai",
+    "ccsHome": "/home/kai/.ccs-custom"
+  }
+  """
+  let d = try JSONDecoder().decode(BarLaunchDescriptor.self, from: Data(json.utf8))
+  check(d.schema == 1, "descriptor: schema decodes to 1")
+  check(d.runtime == "/usr/local/bin/node", "descriptor: runtime decodes")
+  check(d.args == ["/home/kai/.ccs/bin/ccs.js", "bar", "serve"], "descriptor: args decode")
+  check(d.home == "/home/kai", "descriptor: home decodes")
+  check(d.ccsHome == "/home/kai/.ccs-custom", "descriptor: ccsHome decodes when present")
+}
+
+// (L2) Descriptor without ccsHome (optional field absent) decodes to nil.
+do {
+  let json = """
+  {
+    "schema": 1,
+    "runtime": "/opt/homebrew/bin/bun",
+    "args": ["/usr/local/lib/ccs/dist/index.js", "bar", "serve"],
+    "home": "/Users/kai"
+  }
+  """
+  let d = try JSONDecoder().decode(BarLaunchDescriptor.self, from: Data(json.utf8))
+  check(d.ccsHome == nil, "descriptor: absent ccsHome decodes to nil")
+  check(d.runtime == "/opt/homebrew/bin/bun", "descriptor: bun runtime decodes")
+  check(d.args.count == 3, "descriptor: args count is 3")
+  check(d.args.last == "serve", "descriptor: last arg is 'serve'")
+}
+
+// (L3) defaultPath uses ~/.ccs/bar/launch.json.
+do {
+  let home = "/Users/testuser"
+  let path = BarLaunchDescriptor.defaultPath(home: home)
+  check(path.hasSuffix("/.ccs/bar/launch.json"), "descriptor: defaultPath ends with /.ccs/bar/launch.json")
+  check(path.hasPrefix(home), "descriptor: defaultPath starts with home dir")
+}
+
+// (L4) Malformed JSON is non-decodable (no crash, just nil from try?).
+do {
+  let bad = Data("{\"schema\": \"not-an-int\"}".utf8)
+  let d = try? JSONDecoder().decode(BarLaunchDescriptor.self, from: bad)
+  check(d == nil, "descriptor: malformed JSON decodes to nil (no crash)")
+}
+
+// MARK: - BarServerProbe ordering and selection
+
+// Mock transport that returns 200 for exactly one (host, port) combination and
+// times out (throws) for everything else. Used to verify probe ordering.
+final class SelectiveTransport: HTTPTransport, @unchecked Sendable {
+  /// The URL prefix that should succeed (e.g. "http://127.0.0.1:3001").
+  let successPrefix: String
+  /// Track every URL probed, in order.
+  var probed: [String] = []
+
+  init(successPrefix: String) {
+    self.successPrefix = successPrefix
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let urlStr = request.url?.absoluteString ?? ""
+    probed.append(urlStr)
+    if urlStr.hasPrefix(successPrefix) {
+      let http = HTTPURLResponse(
+        url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+      return (Data(), http)
+    }
+    // Simulate connection refused — throw so the probe moves on.
+    throw URLError(.cannotConnectToHost)
+  }
+}
+
+// (P1) bar.json port is probed FIRST, then fallbacks in order.
+// With no live server the probe visits: bar.json port (127.0.0.1 then ::1),
+// then 3000, 3001, ... until it finds one or exhausts all.
+do {
+  // bar.json says port 9999 (unusual, not in fallbacks). We make 127.0.0.1:9999 succeed.
+  let transport = SelectiveTransport(successPrefix: "http://127.0.0.1:9999")
+  let probe = BarServerProbe(transport: transport)
+  let discovery = BarDiscovery(baseUrl: "http://127.0.0.1:9999", port: 9999, authMode: "loopback")
+  let result = await probe.findLiveServer(discovery: discovery)
+
+  // The first URL probed must be the bar.json port on 127.0.0.1.
+  check(
+    transport.probed.first?.hasPrefix("http://127.0.0.1:9999") == true,
+    "probe: bar.json port is tried first (127.0.0.1)")
+  check(result?.absoluteString.hasPrefix("http://127.0.0.1:9999") == true,
+    "probe: returns live URL when bar.json port responds 200")
+}
+
+// (P2) Falls through to fallback list when bar.json port is dead.
+// Make port 3001 on 127.0.0.1 the live one. bar.json points at dead port 9999.
+do {
+  let transport = SelectiveTransport(successPrefix: "http://127.0.0.1:3001")
+  let probe = BarServerProbe(transport: transport)
+  let discovery = BarDiscovery(baseUrl: "http://127.0.0.1:9999", port: 9999, authMode: "loopback")
+  let result = await probe.findLiveServer(discovery: discovery)
+
+  check(result?.absoluteString.hasPrefix("http://127.0.0.1:3001") == true,
+    "probe: falls through to fallback 3001 when bar.json port 9999 is dead")
+
+  // bar.json port 9999 must have been probed before any fallback.
+  let idx9999 = transport.probed.firstIndex(where: { $0.contains(":9999/") })
+  let idx3001 = transport.probed.firstIndex(where: { $0.contains(":3001/") })
+  if let i = idx9999, let j = idx3001 {
+    check(i < j, "probe: bar.json port (9999) tried before fallback port (3001)")
+  } else {
+    check(false, "probe: expected probes for ports 9999 and 3001")
+  }
+}
+
+// (P3) IPv4 tried before IPv6 for each port.
+// Make only the IPv6 address of 3000 succeed so we can verify that 127.0.0.1
+// was tried before [::1] for the same port.
+do {
+  let transport = SelectiveTransport(successPrefix: "http://[::1]:3000")
+  let probe = BarServerProbe(transport: transport)
+  // No bar.json — nil discovery.
+  let result = await probe.findLiveServer(discovery: nil)
+
+  check(result?.absoluteString.hasPrefix("http://[::1]:3000") == true,
+    "probe: IPv6 [::1]:3000 selected when 127.0.0.1:3000 is dead")
+
+  let idx4 = transport.probed.firstIndex(where: { $0.contains("127.0.0.1:3000") })
+  let idx6 = transport.probed.firstIndex(where: { $0.contains("[::1]:3000") })
+  if let i = idx4, let j = idx6 {
+    check(i < j, "probe: 127.0.0.1 tried before [::1] for same port")
+  } else {
+    check(false, "probe: expected probes for both 127.0.0.1:3000 and [::1]:3000")
+  }
+}
+
+// (P4) Returns nil when no server responds.
+do {
+  // A transport that always throws — simulates total offline.
+  struct DeadTransport: HTTPTransport {
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+      throw URLError(.cannotConnectToHost)
+    }
+  }
+  let probe = BarServerProbe(transport: DeadTransport())
+  let result = await probe.findLiveServer(discovery: nil)
+  check(result == nil, "probe: returns nil when no server responds")
+}
+
+// (P5) Non-200 response is treated as dead (not live).
+do {
+  struct Status404Transport: HTTPTransport {
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+      let http = HTTPURLResponse(
+        url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+      return (Data(), http)
+    }
+  }
+  let probe = BarServerProbe(transport: Status404Transport())
+  let result = await probe.findLiveServer(discovery: nil)
+  check(result == nil, "probe: 404 response treated as dead (not live)")
+}
+
+// (P6) Fallback list deduplication: when bar.json port equals a fallback port
+//      (e.g. 3000), that port is not probed twice.
+do {
+  let transport = SelectiveTransport(successPrefix: "http://127.0.0.1:3000")
+  let probe = BarServerProbe(transport: transport)
+  // bar.json port == 3000, which is also in the fallback list.
+  let discovery = BarDiscovery(baseUrl: "http://127.0.0.1:3000", port: 3000, authMode: "loopback")
+  _ = await probe.findLiveServer(discovery: discovery)
+
+  // Count how many times :3000/ appears across all probed URLs.
+  let port3000Count = transport.probed.filter { $0.contains(":3000/") }.count
+  // Expect exactly 1 probe for 3000 on 127.0.0.1 (finds it immediately; stops before ::1).
+  check(port3000Count == 1, "probe: bar.json port 3000 deduped — probed once, not twice")
+}
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 
