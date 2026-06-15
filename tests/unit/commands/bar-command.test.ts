@@ -261,26 +261,39 @@ describe('root-command-router registers bar', () => {
 // 3. bar.json contract written by launch
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Detached-model launch dep helpers (shared by tests in this describe block)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal set of detached-model deps that behave like a successful
+ * launch for most tests. Individual tests override specific deps as needed.
+ */
+function makeDetachedDeps(ccsDir: string, port = 4242) {
+  return {
+    findRunningServer: async () => null,
+    getPort: async () => port,
+    spawnDetachedServer: (_p: number, _log: string) => { /* noop */ },
+    waitForServerLive: async (_url: string) => { /* live immediately */ },
+    writeLaunchDescriptor: () => { /* noop */ },
+    openApp: async (_appPath: string) => { /* noop */ },
+    getCcsDir: () => ccsDir,
+    appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
+  };
+}
+
 describe('bar.json contract (launch subcommand)', () => {
   it('writes ~/.ccs/bar.json with correct shape when server starts', async () => {
     const ccsDir = path.join(tempHome, '.ccs');
     fs.mkdirSync(ccsDir, { recursive: true });
 
-    // Mock dependencies injected into handleBarLaunch
-    const mockEnsureDashboard = async () => ({ port: 4242, baseUrl: 'http://127.0.0.1:4242' });
-    const mockOpenApp = async (_appPath: string) => {
-      calls.push(`open:${_appPath}`);
-    };
-    const mockGetCcsDir = () => ccsDir;
-
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
-      findRunningServer: async () => null,
-      ensureDashboard: mockEnsureDashboard,
-      openApp: mockOpenApp,
-      getCcsDir: mockGetCcsDir,
-      appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
+      ...makeDetachedDeps(ccsDir, 4242),
+      openApp: async (_appPath: string) => {
+        calls.push(`open:${_appPath}`);
+      },
     });
 
     const barJsonPath = path.join(ccsDir, 'bar.json');
@@ -300,15 +313,7 @@ describe('bar.json contract (launch subcommand)', () => {
 
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
-    await handleBarLaunch([], {
-      findRunningServer: async () => null,
-      ensureDashboard: async () => ({ port: 9000, baseUrl: 'http://127.0.0.1:9000' }),
-      openApp: async () => {
-        /* noop */
-      },
-      getCcsDir: () => ccsDir,
-      appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
-    });
+    await handleBarLaunch([], makeDetachedDeps(ccsDir, 9000));
 
     const barJson = JSON.parse(fs.readFileSync(path.join(ccsDir, 'bar.json'), 'utf8')) as {
       authMode: string;
@@ -322,16 +327,14 @@ describe('bar.json contract (launch subcommand)', () => {
 
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
-    // App doesn't exist at appInstallPath
+    // App doesn't exist at appInstallPath — openApp throws so degraded path runs.
     const nonExistentApp = path.join(tempHome, 'Applications', 'CCS Bar.app');
 
     await handleBarLaunch([], {
-      findRunningServer: async () => null,
-      ensureDashboard: async () => ({ port: 3000, baseUrl: 'http://127.0.0.1:3000' }),
+      ...makeDetachedDeps(ccsDir, 3000),
       openApp: async () => {
         throw new Error('App not found');
       },
-      getCcsDir: () => ccsDir,
       appInstallPath: nonExistentApp,
     });
 
@@ -347,13 +350,10 @@ describe('bar.json contract (launch subcommand)', () => {
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
-      findRunningServer: async () => null,
-      ensureDashboard: async () => ({ port: 3001, baseUrl: 'http://127.0.0.1:3001' }),
+      ...makeDetachedDeps(ccsDir, 3001),
       openApp: async () => {
         throw new Error('open failed');
       },
-      getCcsDir: () => ccsDir,
-      appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
     });
 
     // bar.json should still be written despite open failure
@@ -361,22 +361,17 @@ describe('bar.json contract (launch subcommand)', () => {
     expect(fs.existsSync(barJsonPath)).toBe(true);
   });
 
-  it('prints degraded-path warning when server cannot start', async () => {
+  it('prints degraded-path warning when spawnDetachedServer throws', async () => {
     const ccsDir = path.join(tempHome, '.ccs');
     fs.mkdirSync(ccsDir, { recursive: true });
 
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
-      findRunningServer: async () => null,
-      ensureDashboard: async () => {
-        throw new Error('port busy');
+      ...makeDetachedDeps(ccsDir, 3000),
+      spawnDetachedServer: () => {
+        throw new Error('spawn failed');
       },
-      openApp: async () => {
-        /* noop */
-      },
-      getCcsDir: () => ccsDir,
-      appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
     });
 
     const allOutput = consoleOutput.join('\n');
@@ -1588,27 +1583,25 @@ describe('bar command dispatcher: --help anywhere in args (Fix 2)', () => {
 // ---------------------------------------------------------------------------
 
 describe('launch: findRunningServer reuse-first (GH-1500)', () => {
-  it('reuses a running server: ensureDashboard NOT called; bar.json has reused port/baseUrl', async () => {
+  it('reuses a running server: spawnDetachedServer NOT called; bar.json has reused port/baseUrl', async () => {
     const ccsDir = path.join(tempHome, '.ccs');
     fs.mkdirSync(ccsDir, { recursive: true });
 
-    let ensureCalled = false;
+    let spawnCalled = false;
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
       findRunningServer: async () => ({ port: 3000, baseUrl: 'http://127.0.0.1:3000' }),
-      ensureDashboard: async () => {
-        ensureCalled = true;
-        return { port: 9999, baseUrl: 'http://127.0.0.1:9999' };
-      },
-      openApp: async () => {
-        /* noop */
-      },
+      getPort: async () => 9999,
+      spawnDetachedServer: () => { spawnCalled = true; },
+      waitForServerLive: async () => { /* noop */ },
+      writeLaunchDescriptor: () => { /* noop */ },
+      openApp: async () => { /* noop */ },
       getCcsDir: () => ccsDir,
       appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
     });
 
-    expect(ensureCalled).toBe(false);
+    expect(spawnCalled).toBe(false);
 
     const barJson = JSON.parse(
       fs.readFileSync(path.join(ccsDir, 'bar.json'), 'utf8')
@@ -1624,48 +1617,44 @@ describe('launch: findRunningServer reuse-first (GH-1500)', () => {
     const ccsDir = path.join(tempHome, '.ccs');
     fs.mkdirSync(ccsDir, { recursive: true });
 
-    let ensureCalled = false;
+    let spawnCalled = false;
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
       findRunningServer: async () => null,
-      ensureDashboard: async () => {
-        ensureCalled = true;
-        return { port: 4242, baseUrl: 'http://127.0.0.1:4242' };
-      },
-      openApp: async () => {
-        /* noop */
-      },
+      getPort: async () => 4242,
+      spawnDetachedServer: () => { spawnCalled = true; },
+      waitForServerLive: async () => { /* live */ },
+      writeLaunchDescriptor: () => { /* noop */ },
+      openApp: async () => { /* noop */ },
       getCcsDir: () => ccsDir,
       appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
     });
 
-    expect(ensureCalled).toBe(true);
+    expect(spawnCalled).toBe(true);
   });
 
-  it('treats findRunningServer throw as null: ensureDashboard called; no crash', async () => {
+  it('treats findRunningServer throw as null: spawnDetachedServer called; no crash', async () => {
     const ccsDir = path.join(tempHome, '.ccs');
     fs.mkdirSync(ccsDir, { recursive: true });
 
-    let ensureCalled = false;
+    let spawnCalled = false;
     const { handleBarLaunch } = await loadLaunchSubcommand();
 
     await handleBarLaunch([], {
       findRunningServer: async () => {
         throw new Error('probe exploded');
       },
-      ensureDashboard: async () => {
-        ensureCalled = true;
-        return { port: 4242, baseUrl: 'http://127.0.0.1:4242' };
-      },
-      openApp: async () => {
-        /* noop */
-      },
+      getPort: async () => 4242,
+      spawnDetachedServer: () => { spawnCalled = true; },
+      waitForServerLive: async () => { /* live */ },
+      writeLaunchDescriptor: () => { /* noop */ },
+      openApp: async () => { /* noop */ },
       getCcsDir: () => ccsDir,
       appInstallPath: path.join(tempHome, 'Applications', 'CCS Bar.app'),
     });
 
-    expect(ensureCalled).toBe(true);
+    expect(spawnCalled).toBe(true);
     // Should not have printed any bind error
     const allOutput = consoleOutput.join('\n');
     expect(allOutput).not.toMatch(/Could not start/);
@@ -1685,7 +1674,10 @@ describe('launch: bar.json contract (deterministic — GH-1500 null probe)', () 
 
     await handleBarLaunch([], {
       findRunningServer: async () => null,
-      ensureDashboard: async () => ({ port: 4242, baseUrl: 'http://127.0.0.1:4242' }),
+      getPort: async () => 4242,
+      spawnDetachedServer: () => { /* noop */ },
+      waitForServerLive: async () => { /* live */ },
+      writeLaunchDescriptor: () => { /* noop */ },
       openApp: async (_appPath: string) => {
         calls.push(`open:${_appPath}`);
       },

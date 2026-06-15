@@ -13,7 +13,9 @@ export async function showHelp(): Promise<void> {
     [
       'Commands:',
       [
-        ['launch', 'Start the web-server, write ~/.ccs/bar.json, and open the app (default)'],
+        ['launch', 'Spawn the server detached, write ~/.ccs/bar.json, open the app (default)'],
+        ['stop', 'Stop the detached CCS Bar server'],
+        ['status', 'Show whether the CCS Bar server is running'],
         ['install', 'Download CCS Bar from the ccs-bar-latest GitHub release into ~/Applications'],
         ['uninstall', 'Remove the app and version pin'],
         ['version', 'Show CLI and installed app versions'],
@@ -36,7 +38,9 @@ export async function showHelp(): Promise<void> {
     [
       'Examples:',
       [
-        ['ccs bar', 'Start the web-server and open CCS Bar (default launch)'],
+        ['ccs bar', 'Start the server detached and open CCS Bar'],
+        ['ccs bar stop', 'Stop the detached CCS Bar server'],
+        ['ccs bar status', 'Show server running state and PID'],
         ['ccs bar install', 'Download and install CCS Bar, then prompt to launch'],
         ['ccs bar install --launch', 'Install and launch immediately (no prompt)'],
         ['ccs bar install --no-launch', 'Install without launching'],
@@ -56,6 +60,10 @@ export async function showHelp(): Promise<void> {
   }
 
   console.log(dim('  macOS only. The app communicates with the CCS web-server on localhost only.'));
+  console.log(
+    dim('  `ccs bar launch` spawns the server detached — the terminal is freed immediately.')
+  );
+  console.log(dim('  The server persists until stopped with `ccs bar stop` or system reboot.'));
   console.log(
     dim(
       '  Gatekeeper quarantine is cleared automatically after install. If the app is still blocked,'

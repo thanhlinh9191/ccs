@@ -20,6 +20,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { hasAnyFlag } from '../arg-extractor';
+import { getLaunchJsonPath, LAUNCH_JSON_SCHEMA } from './bar-paths';
+import type { LaunchJson } from './bar-paths';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -118,6 +120,13 @@ export interface InstallDeps {
    * Throws on failure; caller catches and aborts install.
    */
   removeExistingApp: (appPath: string) => void;
+  /**
+   * Write launch.json so the Swift app can spawn the server without a shell PATH.
+   * Called after successful install so the descriptor is always fresh.
+   * Injectable for tests — asserts the file is written without real fs side-effects.
+   * Non-fatal when it throws (install already succeeded).
+   */
+  writeLaunchDescriptor: (jsonPath: string, descriptor: LaunchJson) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +407,11 @@ function defaultRemoveExistingApp(appPath: string): void {
   fs.rmSync(appPath, { recursive: true, force: true });
 }
 
+function defaultWriteLaunchDescriptor(jsonPath: string, descriptor: LaunchJson): void {
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+  fs.writeFileSync(jsonPath, JSON.stringify(descriptor, null, 2));
+}
+
 async function defaultLaunchBar(args: string[]): Promise<void> {
   const { handleBarLaunch } = await import('./launch-subcommand');
   await handleBarLaunch(args);
@@ -483,6 +497,7 @@ export async function handleBarInstall(
   const promptLaunch = deps.promptLaunch ?? defaultPromptLaunch;
   const isBarRunning = deps.isBarRunning ?? defaultIsBarRunning;
   const removeExistingApp = deps.removeExistingApp ?? defaultRemoveExistingApp;
+  const writeLaunchDescriptor = deps.writeLaunchDescriptor ?? defaultWriteLaunchDescriptor;
   const ccsDir = (deps.getCcsDir ?? defaultGetCcsDir)();
   const appsDir = (deps.getAppsDir ?? defaultGetAppsDir)();
 
@@ -614,6 +629,24 @@ export async function handleBarInstall(
     // No pin written; ASCII notice; no crash.
     console.log(`[OK] CCS Bar installed to ${appsDir}/${BAR_APP_NAME}`);
     console.log('[!] Could not read app version from Info.plist.');
+  }
+
+  // 4b. Write launch.json so the Swift app can spawn the server without a shell PATH.
+  //     Non-fatal — install has already succeeded at this point.
+  try {
+    const launchJsonPath = getLaunchJsonPath(ccsDir);
+    const launchDescriptor: LaunchJson = {
+      schema: LAUNCH_JSON_SCHEMA,
+      runtime: process.execPath,
+      args: [process.argv[1], 'bar', 'serve'],
+      home: os.homedir(),
+      ...(process.env.CCS_HOME ? { ccsHome: process.env.CCS_HOME } : {}),
+    };
+    writeLaunchDescriptor(launchJsonPath, launchDescriptor);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[!] Could not write launch.json: ${msg}`);
+    // Non-fatal — continue to quarantine clear + launch handoff.
   }
 
   // 5. Capability handshake via GET /api/bar/summary.
