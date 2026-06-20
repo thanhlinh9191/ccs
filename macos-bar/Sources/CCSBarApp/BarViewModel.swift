@@ -33,6 +33,11 @@ final class BarViewModel: ObservableObject {
   @Published var spendChartStyle: SpendChartStyle {
     didSet { SpendChartStyleStore.save(spendChartStyle) }
   }
+  /// Active time window for the spend sparkline (today/7d/30d). Persisted via
+  /// SpendPeriodStore; didSet mirrors the spendChartStyle pattern.
+  @Published var spendPeriod: SpendPeriod {
+    didSet { SpendPeriodStore.save(spendPeriod) }
+  }
   /// The alerts the most recent evaluation wanted delivered, surfaced in the
   /// dropdown so users who deny notifications still see the conditions.
   @Published var activeAlerts: [BarNotification] = []
@@ -71,6 +76,7 @@ final class BarViewModel: ObservableObject {
     self.appearance = BarAppearanceStore.load()
     self.glanceMode = prefs.load().glanceMode
     self.spendChartStyle = SpendChartStyleStore.load()
+    self.spendPeriod = SpendPeriodStore.load()
     reconnect()
     startBackgroundPolling()
   }
@@ -217,6 +223,16 @@ final class BarViewModel: ObservableObject {
   func onOpen() {
     let force = debouncer.shouldRefresh(now: Date())
     reconnectAndLoad(force: force)
+  }
+
+  // MARK: - Force refresh (bypasses the 15s debounce)
+
+  /// Unconditional force-refresh: skips the debouncer and calls
+  /// `reconnectAndLoad(force: true)` directly. Used by the footer Refresh button
+  /// and by the Codex stale-footnote inline action so those never silently no-op
+  /// inside the debounce window.
+  func forceRefresh() {
+    reconnectAndLoad(force: true)
   }
 
   // MARK: - Start CCS (called from offline UI button)

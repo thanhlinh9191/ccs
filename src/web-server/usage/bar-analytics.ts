@@ -22,6 +22,20 @@ export interface BarAnalyticsDay {
 }
 
 /**
+ * One hour's roll-up for today's spend chart.
+ * `hour` is the user's LOCAL "YYYY-MM-DD HH:00" clock hour (the UTC keys from
+ * HourlyUsage are converted to local before bucketing). Covers exactly 24
+ * buckets (00:00..23:00) for today only; zero-filled when no activity was
+ * recorded in that hour.
+ */
+export interface BarAnalyticsHour {
+  /** Local "YYYY-MM-DD HH:00" clock-hour bucket key. */
+  hour: string;
+  cost: number;
+  requests: number;
+}
+
+/**
  * One usage surface's contribution to spend over the active window.
  * A "surface" is the tool/origin a request came from (Claude Code, Codex, the
  * CLIProxy router, Droid, …) — the dimension the menu bar uses to answer
@@ -64,6 +78,14 @@ export interface BarAnalytics {
   allTime: BarAnalyticsWindow;
   /** Oldest → newest, exactly 30 entries (zero-filled), for the sparkline. */
   byDay: BarAnalyticsDay[];
+  /**
+   * Hourly spend + request counts for today only. Exactly 24 entries ordered
+   * 00:00 → 23:00 (local), zero-filled for hours with no activity. Used by the
+   * bar's intra-day spend chart. `hour` keys are "YYYY-MM-DD HH:00" local time
+   * matching HourlyUsage.hour. Empty array from the snapshot-only path
+   * (computeBarAnalytics) which carries no hourly dimension.
+   */
+  byHour: BarAnalyticsHour[];
   /** Highest-spend models (descending, capped) for the window in `topModelsWindow`. */
   topModels: BarAnalyticsModel[];
   /** Which window `topModels` covers — the most recent one that has data. */
@@ -231,6 +253,9 @@ export function computeBarAnalytics(
     monthToDate,
     allTime,
     byDay: Array.from(dayBuckets.values()),
+    // The snapshot-detail path has no hourly dimension; return empty so the wire
+    // shape is stable and callers can always iterate byHour safely.
+    byHour: [],
     topModels,
     topModelsWindow: recentHasData ? '30d' : 'all',
     // The snapshot-detail path has no surface attribution; the daily path does.
@@ -276,6 +301,25 @@ function dateFromDayKey(key: string): Date | null {
 }
 
 /**
+ * Convert a "YYYY-MM-DD HH:00" hour key into the user's LOCAL Date.
+ *
+ * The usage pipeline builds hour keys by slicing the raw ISO timestamp, which is
+ * UTC for the CLIProxy/Codex/Claude sources, so the key's HH is a UTC hour. The
+ * dashboard's 24H chart treats these keys as UTC and renders them in local time;
+ * we do the same here so the bar's intra-day chart shows the user's own clock
+ * hours (not UTC) and so a late-local-evening record — which is the next day in
+ * UTC — still lands in today's local chart. Returns null for unparseable keys.
+ */
+function localDateFromHourKey(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):/.exec(key);
+  if (!match) return null;
+  const date = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), 0, 0)
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
  * Roll the merged, multi-source usage aggregates into the bar analytics payload.
  *
  * Unlike `computeBarAnalytics` (which reads only the CLIProxy snapshot — frozen
@@ -299,6 +343,21 @@ export function computeBarAnalyticsFromDaily(
   // Daily keys (YYYY-MM-DD) and hourly keys (YYYY-MM-DD HH:00) are already local,
   // so slice(0,7) yields the local YYYY-MM to compare against the current month.
   const currentMonth = localMonthKey(now);
+
+  // Today's local day key — used to seed the 24 intra-day buckets for the
+  // spend chart and to filter which hourly records belong to today (local).
+  const todayKey = localDayKey(now);
+
+  // Seed 24 zero-filled hour buckets for today, ordered 00 → 23, keyed by the
+  // user's LOCAL clock hour ("YYYY-MM-DD HH:00" in local time). The UTC hour
+  // keys from the usage pipeline are converted to local before being bucketed
+  // here (see localDateFromHourKey), so the chart shows the user's own hours.
+  const hourBuckets = new Map<string, BarAnalyticsHour>();
+  for (let h = 0; h < 24; h++) {
+    const hh = String(h).padStart(2, '0');
+    const key = `${todayKey} ${hh}:00`;
+    hourBuckets.set(key, { hour: key, cost: 0, requests: 0 });
+  }
 
   const dayBuckets = new Map<string, BarAnalyticsDay>();
   for (let i = SPARKLINE_DAYS - 1; i >= 0; i--) {
@@ -372,16 +431,39 @@ export function computeBarAnalyticsFromDaily(
   }
 
   // Pass 2 — hourly: request counts (daily aggregates don't carry them).
+  // Also fills the 24-bucket intra-day spend chart for today (local time).
   for (const h of hourly) {
     if (!h || !h.hour) continue;
+
+    // Intra-day hourly buckets (LOCAL): convert the UTC hour key to the user's
+    // local time and bucket today's local hours. Done BEFORE the UTC `delta`
+    // gate below so a late-local-evening record — next day in UTC — still lands
+    // in today's chart. Cost precedence mirrors the daily pass (totalCost, then
+    // cost). Independent of the UTC day-key math the rest of this loop uses.
+    const localHourDate = localDateFromHourKey(h.hour);
+    if (localHourDate && localDayKey(localHourDate) === todayKey) {
+      const hCost = Number.isFinite(h.totalCost)
+        ? h.totalCost
+        : Number.isFinite(h.cost)
+          ? h.cost
+          : 0;
+      const localHH = String(localHourDate.getHours()).padStart(2, '0');
+      const hBucket = hourBuckets.get(`${todayKey} ${localHH}:00`);
+      if (hBucket) {
+        hBucket.cost += hCost;
+        hBucket.requests += Number.isFinite(h.requestCount) ? (h.requestCount as number) : 0;
+      }
+    }
+
     const dayKey = h.hour.slice(0, 10);
     const activityDate = dateFromDayKey(dayKey);
     if (!activityDate) continue;
     const delta = dayDelta(now, activityDate);
     if (delta < 0) continue;
     const requests = Number.isFinite(h.requestCount) ? (h.requestCount as number) : 0;
-    if (requests <= 0) continue;
     const source = h.source || '';
+
+    if (requests <= 0) continue;
 
     allTime.requests += requests;
     bumpSurface(surfaceAll, source, 0, requests);
@@ -422,6 +504,8 @@ export function computeBarAnalyticsFromDaily(
     monthToDate,
     allTime,
     byDay: Array.from(dayBuckets.values()),
+    // 24 hour buckets for today (00:00 → 23:00 local), zero-filled.
+    byHour: Array.from(hourBuckets.values()),
     topModels,
     topModelsWindow: recentHasData ? '30d' : 'all',
     bySurface,

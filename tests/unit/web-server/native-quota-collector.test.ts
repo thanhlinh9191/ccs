@@ -1,18 +1,21 @@
 /**
  * Tests for the native subscription quota collector.
  *
- * The Anthropic fetch is ALWAYS mocked — these tests NEVER hit the live usage
- * endpoint. A controllable clock drives TTL / backoff / breaker assertions.
+ * Neither the Anthropic nor the ChatGPT endpoint is ever hit — all fetches are
+ * injected via NativeQuotaDeps. A controllable clock drives TTL / backoff /
+ * breaker assertions for both the Claude and Codex paths.
  */
 
 import { beforeEach, describe, expect, it } from 'bun:test';
 import {
   getNativeAccountRows,
+  getCachedNativeAccountRows,
   resetNativeQuotaState,
   type NativeQuotaDeps,
 } from '../../../src/web-server/usage/native-quota-collector';
-import type { ClaudeQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { ClaudeQuotaResult, CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
 import type { ClaudeNativeCredentials } from '../../../src/web-server/usage/claude-native-credentials';
+import type { CodexLocalQuota } from '../../../src/web-server/usage/codex-local-quota-collector';
 
 // A jump comfortably past any single-call backoff cooldown (<= 60s), used so a
 // breaker-test fetch is not blocked by the prior 429's per-call cooldown.
@@ -351,11 +354,331 @@ describe('stale-on-fail', () => {
   });
 });
 
+// ============================================================================
+// Codex network helpers
+// ============================================================================
+
+function codexSuccessQuota(): CodexQuotaResult {
+  return {
+    success: true,
+    windows: [],
+    coreUsage: {
+      fiveHour: {
+        label: 'Primary',
+        remainingPercent: 60,
+        resetAfterSeconds: 3600,
+        resetAt: '2026-06-09T19:00:00.000Z',
+      },
+      weekly: {
+        label: 'Secondary',
+        remainingPercent: 80,
+        resetAfterSeconds: 86400 * 4,
+        resetAt: '2026-06-13T00:00:00.000Z',
+      },
+    },
+    planType: 'pro',
+    lastUpdated: Date.now(),
+    accountId: 'codex-user@example.com',
+  };
+}
+
+function codexRateLimitedQuota(retryAfter?: string): CodexQuotaResult {
+  return {
+    success: false,
+    windows: [],
+    planType: null,
+    lastUpdated: Date.now(),
+    accountId: 'codex-user@example.com',
+    httpStatus: 429,
+    retryable: true,
+    ...(retryAfter ? { errorDetail: `retry-after:${retryAfter}` } : {}),
+    error: 'rate limited',
+  };
+}
+
+function codexReatuhQuota(): CodexQuotaResult {
+  return {
+    success: false,
+    windows: [],
+    planType: null,
+    lastUpdated: Date.now(),
+    accountId: 'codex-user@example.com',
+    needsReauth: true,
+    error: 'Token expired',
+  };
+}
+
+function codexLocalQuota(): CodexLocalQuota {
+  return {
+    quotaPercentage: 30,
+    nextReset: '2026-06-09T19:00:00.000Z',
+    tier: 'pro',
+    stale: true,
+    staleAsOf: '2026-06-09T13:30:00.000Z',
+    windows: [
+      {
+        key: 'five_hour',
+        label: '5h',
+        usedPercent: 70,
+        remainingPercent: 30,
+        resetAt: '2026-06-09T19:00:00.000Z',
+        windowMinutes: 300,
+      },
+    ],
+  };
+}
+
+/**
+ * Build a NativeQuotaDeps that completely stubs the Codex path.
+ * Claude path is disabled (no credentials) so only the Codex row is produced.
+ */
+function makeCodexDeps(
+  overrides: Partial<NativeQuotaDeps> & { clock: { now: number } }
+): NativeQuotaDeps & { networkCount: () => number; localCount: () => number } {
+  let networkCalls = 0;
+  let localCalls = 0;
+  const { clock, ...rest } = overrides;
+  return {
+    // Disable Claude path
+    readCredentials: () => null,
+    // Default network quota: success
+    fetchCodexNetworkQuota: async (_id: string) => {
+      networkCalls += 1;
+      return codexSuccessQuota();
+    },
+    // Default local fallback: stale data
+    getCodexQuota: async () => {
+      localCalls += 1;
+      return codexLocalQuota();
+    },
+    // Default account id resolved
+    getDefaultCodexAccountId: () => 'codex-user@example.com',
+    now: () => clock.now,
+    sleep: async () => {},
+    // Allow overriding any dep
+    ...rest,
+    networkCount: () => networkCalls,
+    localCount: () => localCalls,
+  };
+}
+
+// ============================================================================
+// Codex network path tests
+// ============================================================================
+
+describe('Codex network path', () => {
+  it('network success builds a fresh row from coreUsage — no staleAsOf, health ok, correct windows', async () => {
+    const clock = { now: 1_000_000 };
+    const deps = makeCodexDeps({ clock });
+
+    const rows = await getNativeAccountRows(deps);
+    const row = rows.find((r) => r.provider === 'codex');
+
+    expect(row).toBeDefined();
+    expect(row?.quotaStatus).toBe('ok');
+    expect(row?.health).toBe('ok');
+    expect(row?.tier).toBe('pro');
+    expect(row?.needsReauth).toBe(false);
+    // No staleAsOf on a live result
+    expect(row?.staleAsOf).toBeUndefined();
+    // quota_percentage = min(60, 80) = 60
+    expect(row?.quota_percentage).toBe(60);
+    // next_reset = soonest = fiveHour resetAt
+    expect(row?.next_reset).toBe('2026-06-09T19:00:00.000Z');
+    // quotaWindows: five_hour + seven_day
+    expect(row?.quotaWindows).toHaveLength(2);
+    const fiveHr = row?.quotaWindows?.find((w) => w.key === 'five_hour');
+    expect(fiveHr?.label).toBe('5h');
+    expect(fiveHr?.remainingPercent).toBe(60);
+    expect(fiveHr?.usedPercent).toBe(40);
+    expect(fiveHr?.windowMinutes).toBe(300);
+    expect(fiveHr?.resetAt).toBe('2026-06-09T19:00:00.000Z');
+    const week = row?.quotaWindows?.find((w) => w.key === 'seven_day');
+    expect(week?.label).toBe('week');
+    expect(week?.remainingPercent).toBe(80);
+    expect(week?.usedPercent).toBe(20);
+    expect(week?.windowMinutes).toBe(10080);
+    // Network was called; local was NOT (network succeeded)
+    expect(deps.networkCount()).toBe(1);
+    expect(deps.localCount()).toBe(0);
+  });
+
+  it('network failure falls back to local stale row — staleAsOf set, health warning', async () => {
+    const clock = { now: 1_000_000 };
+    const deps = makeCodexDeps({
+      clock,
+      fetchCodexNetworkQuota: async () => ({
+        success: false,
+        windows: [],
+        planType: null,
+        lastUpdated: Date.now(),
+        error: 'network error',
+        retryable: true,
+      }),
+    });
+
+    const rows = await getNativeAccountRows(deps);
+    const row = rows.find((r) => r.provider === 'codex');
+
+    expect(row).toBeDefined();
+    expect(row?.health).toBe('warning');
+    expect(row?.staleAsOf).toBe('2026-06-09T13:30:00.000Z');
+    expect(deps.localCount()).toBe(1);
+  });
+
+  it('force bypasses TTL and re-fetches from network', async () => {
+    const clock = { now: 1_000_000 };
+    const deps = makeCodexDeps({ clock });
+
+    // Prime the cache
+    await getNativeAccountRows(deps);
+    expect(deps.networkCount()).toBe(1);
+
+    // Normal call within TTL: served from cache
+    clock.now += 5 * 60 * 1000;
+    await getNativeAccountRows(deps);
+    expect(deps.networkCount()).toBe(1);
+
+    // Force call: bypasses TTL, re-fetches
+    await getNativeAccountRows(deps, { force: true });
+    expect(deps.networkCount()).toBe(2);
+  });
+
+  it('token_expired (needsReauth) returns a reauth row — not cached as good', async () => {
+    const clock = { now: 1_000_000 };
+    const deps = makeCodexDeps({
+      clock,
+      fetchCodexNetworkQuota: async () => codexReatuhQuota(),
+    });
+
+    const rows = await getNativeAccountRows(deps);
+    const row = rows.find((r) => r.provider === 'codex');
+
+    expect(row?.quotaStatus).toBe('error');
+    expect(row?.health).toBe('error');
+    expect(row?.needsReauth).toBe(true);
+    // Local fallback was NOT called (reauth is a distinct path, not a transient error)
+    expect(deps.localCount()).toBe(0);
+  });
+
+  it('breaker-open path: skips network and serves local fallback', async () => {
+    const clock = { now: 1_000_000 };
+    let networkCalls = 0;
+    let localCalls = 0;
+
+    const deps: NativeQuotaDeps & { networkCount: () => number; localCount: () => number } = {
+      readCredentials: () => null,
+      getDefaultCodexAccountId: () => 'codex-user@example.com',
+      fetchCodexNetworkQuota: async () => {
+        networkCalls += 1;
+        return codexRateLimitedQuota();
+      },
+      getCodexQuota: async () => {
+        localCalls += 1;
+        return codexLocalQuota();
+      },
+      now: () => clock.now,
+      sleep: async () => {},
+      networkCount: () => networkCalls,
+      localCount: () => localCalls,
+    };
+
+    // Trip the breaker with 3 consecutive 429s
+    for (let i = 0; i < 3; i++) {
+      await getNativeAccountRows(deps);
+      // advance past per-call cooldown between each
+      clock.now += 62_000;
+    }
+    const callsAfterTrip = networkCalls;
+
+    // Breaker is now open: next call must skip network
+    await getNativeAccountRows(deps);
+    expect(networkCalls).toBe(callsAfterTrip); // no new network call
+    // Local fallback is called instead
+    expect(localCalls).toBeGreaterThan(0);
+  });
+
+  it('no-account path: skips network and serves local fallback', async () => {
+    const clock = { now: 1_000_000 };
+    let networkCalls = 0;
+    let localCalls = 0;
+
+    const deps: NativeQuotaDeps = {
+      readCredentials: () => null,
+      getDefaultCodexAccountId: () => null, // no account configured
+      fetchCodexNetworkQuota: async () => {
+        networkCalls += 1;
+        return codexSuccessQuota();
+      },
+      getCodexQuota: async () => {
+        localCalls += 1;
+        return codexLocalQuota();
+      },
+      now: () => clock.now,
+      sleep: async () => {},
+    };
+
+    const rows = await getNativeAccountRows(deps);
+    const row = rows.find((r) => r.provider === 'codex');
+
+    // No network call since no account
+    expect(networkCalls).toBe(0);
+    // Local fallback was used
+    expect(localCalls).toBe(1);
+    // Row is present from local data
+    expect(row).toBeDefined();
+    expect(row?.health).toBe('warning'); // local stale
+  });
+
+  it('network success with EMPTY coreUsage falls back to local (no contentless ok row)', async () => {
+    const clock = { now: 1_000_000 };
+    // Track our own network counter — an override passed to makeCodexDeps
+    // replaces the helper's default counting fetcher, so deps.networkCount()
+    // would not see this override's calls.
+    let networkCalls = 0;
+    const deps = makeCodexDeps({
+      clock,
+      // Healthy response but no resolved core windows (e.g. only code-review
+      // windows or a changed payload) — carries no glanceable 5h/weekly signal.
+      fetchCodexNetworkQuota: async () => {
+        networkCalls += 1;
+        return {
+          success: true,
+          windows: [],
+          coreUsage: { fiveHour: null, weekly: null },
+          planType: 'pro',
+          lastUpdated: clock.now,
+          accountId: 'codex-user@example.com',
+        };
+      },
+    });
+
+    const rows = await getNativeAccountRows(deps);
+    const row = rows.find((r) => r.provider === 'codex');
+
+    // Network was attempted, but the empty result must NOT be cached as an "ok"
+    // row — the local fallback supplies real (stale) data instead.
+    expect(networkCalls).toBe(1);
+    expect(deps.localCount()).toBe(1);
+    expect(row).toBeDefined();
+    expect(row?.health).toBe('warning'); // came from local stale path
+    expect(row?.staleAsOf).toBe('2026-06-09T13:30:00.000Z');
+    expect(row?.quotaWindows).toHaveLength(1); // local five_hour window
+  });
+});
+
+// ============================================================================
+// Codex path (original local-only tests, preserved)
+// These tests explicitly set getDefaultCodexAccountId: () => null so the
+// network path is skipped and only the local fallback is exercised.
+// ============================================================================
+
 describe('Codex path', () => {
   it('maps a local Codex quota into a codex ok row', async () => {
     const clock = { now: 1_000_000 };
     const deps: NativeQuotaDeps = {
       readCredentials: () => null, // no claude row
+      getDefaultCodexAccountId: () => null, // disable network path
       getCodexQuota: async () => ({
         quotaPercentage: 52,
         nextReset: '2026-06-09T19:00:00.000Z',
@@ -398,6 +721,7 @@ describe('Codex path', () => {
     const clock = { now: 1_000_000 };
     const deps: NativeQuotaDeps = {
       readCredentials: () => null,
+      getDefaultCodexAccountId: () => null, // disable network path
       getCodexQuota: async () => ({
         quotaPercentage: 10,
         nextReset: null,
@@ -419,10 +743,35 @@ describe('Codex path', () => {
     const clock = { now: 1_000_000 };
     const deps: NativeQuotaDeps = {
       readCredentials: () => null,
+      getDefaultCodexAccountId: () => null, // disable network path
       getCodexQuota: async () => null,
       now: () => clock.now,
     };
     const rows = await getNativeAccountRows(deps);
     expect(rows.find((r) => r.provider === 'codex')).toBeUndefined();
+  });
+});
+
+describe('getCachedNativeAccountRows (instant, no-fetch fallback)', () => {
+  it('returns [] before any successful collect', () => {
+    expect(getCachedNativeAccountRows()).toEqual([]);
+  });
+
+  it('returns the last cached codex row (cached=true) after a successful collect, [] after reset', async () => {
+    const clock = { now: 1_000_000 };
+    const deps = makeCodexDeps({ clock });
+
+    // Prime the cache via a successful network collect.
+    await getNativeAccountRows(deps);
+
+    const cached = getCachedNativeAccountRows();
+    const codex = cached.find((r) => r.provider === 'codex');
+    expect(codex).toBeDefined();
+    expect(codex?.cached).toBe(true);
+    // No additional network call — the accessor reads cache only.
+    expect(deps.networkCount()).toBe(1);
+
+    resetNativeQuotaState();
+    expect(getCachedNativeAccountRows()).toEqual([]);
   });
 });

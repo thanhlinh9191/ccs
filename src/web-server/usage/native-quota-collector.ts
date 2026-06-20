@@ -2,11 +2,11 @@
  * Native subscription quota collector — the ONLY server-side fetch surface for
  * the user's own Claude Code + Codex subscription quota.
  *
- * The macOS bar reads localhost /api/bar/summary and NEVER calls Anthropic. All
- * Anthropic traffic originates here, under strict safety controls, because the
- * OAuth usage endpoint is undocumented and hostile to polling (persistent 429s,
- * no Retry-After, first-party-only policy). The controls below exist to protect
- * the user's account:
+ * The macOS bar reads localhost /api/bar/summary and NEVER calls Anthropic or
+ * ChatGPT. All upstream traffic originates here, under strict safety controls,
+ * because these endpoints are undocumented and hostile to polling (persistent
+ * 429s, no Retry-After, first-party-only policy). The controls below exist to
+ * protect the user's accounts:
  *
  *   - long TTL (10 min) on-demand cache, never a tight timer loop
  *   - in-flight coalescing so concurrent /summary calls share one fetch
@@ -14,7 +14,10 @@
  *   - circuit breaker stops calling after repeated 429s for a cooldown
  *   - serve-stale-on-failure; only omit a row when there is genuinely no data
  *
- * Codex is a pure local file read (no network), so it skips the network guards.
+ * Claude path: reads native credentials + polls api.anthropic.com/api/oauth/usage.
+ * Codex path: PRIMARY = live network (chatgpt.com/backend-api/wham/usage, via
+ * fetchCodexQuota), FALLBACK = local session logs (getCodexLocalQuota), mirroring
+ * the same safety pattern as the Claude path.
  */
 
 import {
@@ -25,8 +28,10 @@ import {
   type ClaudeNativeCredentials,
 } from './claude-native-credentials';
 import { fetchClaudeQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-claude';
+import { fetchCodexQuota } from '../../cliproxy/quota/quota-fetcher-codex';
+import { getDefaultAccount } from '../../cliproxy/accounts/query';
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
-import type { ClaudeQuotaResult } from '../../cliproxy/quota/quota-types';
+import type { ClaudeQuotaResult, CodexQuotaResult } from '../../cliproxy/quota/quota-types';
 import type { BarSummaryRow, QuotaWindowDetail } from '../routes/bar-routes';
 
 // ============================================================================
@@ -56,7 +61,7 @@ const CLAUDE_PROVIDER = 'claude-code';
 const CODEX_PROVIDER = 'codex';
 
 // ============================================================================
-// Injectable dependencies (tests inject mocks; never live Anthropic in CI)
+// Injectable dependencies (tests inject mocks; never live endpoints in CI)
 // ============================================================================
 
 export interface NativeQuotaDeps {
@@ -64,7 +69,17 @@ export interface NativeQuotaDeps {
   readCredentials?: () => ClaudeNativeCredentials | null;
   /** Fetch Claude quota with a directly-supplied native token. */
   fetchClaudeQuota?: (accessToken: string, accountId?: string) => Promise<ClaudeQuotaResult>;
-  /** Read Codex quota from local session logs (zero network). */
+  /**
+   * Resolve the default Codex account ID for network quota fetch.
+   * Returns null when no Codex account is configured (bar omits the live path).
+   */
+  getDefaultCodexAccountId?: () => string | null;
+  /**
+   * Fetch Codex quota live from the network.
+   * Injected so tests never hit chatgpt.com.
+   */
+  fetchCodexNetworkQuota?: (accountId: string) => Promise<CodexQuotaResult>;
+  /** Read Codex quota from local session logs (zero network, fallback). */
   getCodexQuota?: () => Promise<CodexLocalQuota | null>;
   /** Clock seam for deterministic backoff/TTL/breaker tests. */
   now?: () => number;
@@ -106,10 +121,12 @@ function freshProviderState(): ProviderState {
 }
 
 const claudeState = freshProviderState();
+const codexState = freshProviderState();
 
 /** Reset all module state. Tests call this to avoid cross-test pollution. */
 export function resetNativeQuotaState(): void {
   Object.assign(claudeState, freshProviderState());
+  Object.assign(codexState, freshProviderState());
 }
 
 // ============================================================================
@@ -297,6 +314,75 @@ function buildCodexRow(quota: CodexLocalQuota, now: number): BarSummaryRow {
   };
 }
 
+/**
+ * Build the Codex row from a LIVE network quota result.
+ *
+ * Uses coreUsage (5h/weekly) to produce QuotaWindowDetail entries with the same
+ * stable keys as the Claude path. quota_percentage = min remaining across present
+ * core windows. next_reset = soonest core resetAt. No staleAsOf on a live result.
+ */
+function buildCodexNetworkRow(quota: CodexQuotaResult, now: number): BarSummaryRow {
+  const windows: QuotaWindowDetail[] = [];
+
+  const fiveHour = quota.coreUsage?.fiveHour;
+  if (fiveHour) {
+    windows.push({
+      key: 'five_hour',
+      label: '5h',
+      usedPercent: 100 - fiveHour.remainingPercent,
+      remainingPercent: fiveHour.remainingPercent,
+      resetAt: fiveHour.resetAt,
+      windowMinutes: FIVE_HOUR_MINUTES,
+    });
+  }
+
+  const weekly = quota.coreUsage?.weekly;
+  if (weekly) {
+    windows.push({
+      key: 'seven_day',
+      label: 'week',
+      usedPercent: 100 - weekly.remainingPercent,
+      remainingPercent: weekly.remainingPercent,
+      resetAt: weekly.resetAt,
+      windowMinutes: SEVEN_DAY_MINUTES,
+    });
+  }
+
+  // quota_percentage = min remaining across the windows present (mirrors Claude derivation)
+  const coreWindows = [fiveHour, weekly].filter((w): w is NonNullable<typeof w> => !!w);
+  const quotaPercentage =
+    coreWindows.length > 0 ? Math.min(...coreWindows.map((w) => w.remainingPercent)) : null;
+
+  // next_reset = soonest resetAt across present core windows
+  const resets = coreWindows
+    .map((w) => w.resetAt)
+    .filter((r): r is string => typeof r === 'string')
+    .map((r) => ({ iso: r, ms: new Date(r).getTime() }))
+    .filter((r) => Number.isFinite(r.ms))
+    .sort((a, b) => a.ms - b.ms);
+  const nextReset = resets.length > 0 ? resets[0].iso : null;
+
+  return {
+    account_id: CODEX_PROVIDER,
+    provider: CODEX_PROVIDER,
+    displayName: 'Codex',
+    tier: quota.planType ?? null,
+    paused: false,
+    quota_percentage: quotaPercentage,
+    quotaStatus: 'ok',
+    next_reset: nextReset,
+    is_default: false,
+    last_activity_at: null,
+    today_cost: null,
+    health: 'ok',
+    cached: false,
+    fetchedAt: new Date(now).toISOString(),
+    needsReauth: false,
+    // No staleAsOf — live data is always fresh.
+    ...(windows.length > 0 ? { quotaWindows: windows } : {}),
+  };
+}
+
 /** Return the cached row marked cached=true (used for TTL + stale serving). */
 function serveCached(state: ProviderState): BarSummaryRow | null {
   if (!state.cachedRow) return null;
@@ -307,16 +393,20 @@ function serveCached(state: ProviderState): BarSummaryRow | null {
 // Claude path with full safety controls
 // ============================================================================
 
-async function collectClaudeRow(deps: NativeQuotaDeps): Promise<BarSummaryRow | null> {
+async function collectClaudeRow(
+  deps: NativeQuotaDeps,
+  force = false
+): Promise<BarSummaryRow | null> {
   const now = (deps.now ?? Date.now)();
   const state = claudeState;
 
-  // Serve from cache while within TTL — on-demand only, NO network.
-  if (state.cachedRow && now - state.cachedAt < NATIVE_QUOTA_TTL_MS) {
+  // Serve from cache while within TTL — force bypasses TTL short-circuit.
+  if (!force && state.cachedRow && now - state.cachedAt < NATIVE_QUOTA_TTL_MS) {
     return serveCached(state);
   }
 
   // Breaker open or cooldown active -> zero network, serve stale (may be null).
+  // Force does NOT bypass the breaker — it protects the account.
   if (now < state.breakerOpenUntil || now < state.cooldownUntil) {
     return serveCached(state);
   }
@@ -419,19 +509,140 @@ async function collectClaudeRow(deps: NativeQuotaDeps): Promise<BarSummaryRow | 
 }
 
 // ============================================================================
-// Codex path (local read, no network guards needed)
+// Codex path with live network as PRIMARY, local logs as FALLBACK
 // ============================================================================
 
-async function collectCodexRow(deps: NativeQuotaDeps): Promise<BarSummaryRow | null> {
+async function collectCodexRow(
+  deps: NativeQuotaDeps,
+  force = false
+): Promise<BarSummaryRow | null> {
   const now = (deps.now ?? Date.now)();
-  const getCodex = deps.getCodexQuota ?? getCodexLocalQuota;
-  try {
-    const quota = await getCodex();
-    if (!quota) return null; // exec-mode / no rate_limits -> omit the row
-    return buildCodexRow(quota, now);
-  } catch {
-    return null;
+  const state = codexState;
+
+  // Serve from cache while within TTL — force bypasses TTL short-circuit.
+  if (!force && state.cachedRow && now - state.cachedAt < NATIVE_QUOTA_TTL_MS) {
+    return serveCached(state);
   }
+
+  // Breaker open or cooldown active -> skip network, go to LOCAL fallback.
+  // Force does NOT bypass the breaker — it protects the account.
+  const breakerOrCooldownActive = now < state.breakerOpenUntil || now < state.cooldownUntil;
+
+  // Coalesce: concurrent callers past TTL share one in-flight resolution.
+  if (state.pending) {
+    return state.pending;
+  }
+
+  const getDefaultAccountId =
+    deps.getDefaultCodexAccountId ?? (() => getDefaultAccount('codex')?.id ?? null);
+  const fetchNetwork =
+    deps.fetchCodexNetworkQuota ?? ((accountId: string) => fetchCodexQuota(accountId));
+  const getCodex = deps.getCodexQuota ?? getCodexLocalQuota;
+  const sleep = deps.sleep ?? defaultSleep;
+
+  state.pending = (async (): Promise<BarSummaryRow | null> => {
+    try {
+      // ----------------------------------------------------------------
+      // PRIMARY: live network fetch (skipped when breaker/cooldown active)
+      // ----------------------------------------------------------------
+      if (!breakerOrCooldownActive) {
+        const accountId = getDefaultAccountId();
+        if (accountId) {
+          const quota = await fetchNetwork(accountId);
+
+          if (quota.success) {
+            // A healthy response closes the breaker and clears backoff,
+            // regardless of content.
+            state.consecutive429 = 0;
+            state.breakerOpenUntil = 0;
+            state.cooldownUntil = 0;
+            state.backoffAttempt = 0;
+            // Only usable when at least one core window (5h/weekly) resolved. A
+            // success with empty coreUsage (only code-review/additional windows,
+            // or a changed payload) carries no glanceable signal — do NOT cache
+            // a contentless "ok" row or clobber a good cache; fall through to
+            // the local fallback so the bar shows real data instead.
+            if (quota.coreUsage?.fiveHour || quota.coreUsage?.weekly) {
+              const row = buildCodexNetworkRow(quota, now);
+              state.cachedRow = row;
+              state.cachedAt = now;
+              return { ...row, cached: false };
+            }
+            // else: fall through to LOCAL fallback below.
+          } else if (quota.needsReauth) {
+            // Token expired -> reauth row; do NOT cache as a good value.
+            return {
+              account_id: CODEX_PROVIDER,
+              provider: CODEX_PROVIDER,
+              displayName: 'Codex',
+              tier: null,
+              paused: false,
+              quota_percentage: null,
+              quotaStatus: 'error',
+              next_reset: null,
+              is_default: false,
+              last_activity_at: null,
+              today_cost: null,
+              health: 'error',
+              cached: false,
+              fetchedAt: new Date(now).toISOString(),
+              needsReauth: true,
+            };
+          } else if (quota.httpStatus === 429) {
+            // 429: apply breaker + backoff, then fall through to local.
+            state.consecutive429 += 1;
+            if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
+              state.breakerOpenUntil = now + CB_COOLDOWN_MS;
+            }
+            const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
+            const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
+            state.cooldownUntil = now + backoff;
+            state.backoffAttempt += 1;
+            void sleep; // retained as an injectable seam for future inline retry
+          } else if (quota.retryable) {
+            // Other transient failure: set cooldown, fall through to local.
+            const backoff = computeBackoffMs(state.backoffAttempt);
+            state.cooldownUntil = now + backoff;
+            state.backoffAttempt += 1;
+          } else {
+            // Terminal non-retryable failure (e.g. 403/404): back off so we
+            // don't re-hit a dead endpoint every poll when no local data caches
+            // a row to engage the TTL short-circuit. Then fall through to local.
+            const backoff = computeBackoffMs(state.backoffAttempt);
+            state.cooldownUntil = now + backoff;
+            state.backoffAttempt += 1;
+          }
+          // Fall through to LOCAL fallback below.
+        }
+        // No configured accountId -> fall through to local fallback.
+      }
+
+      // ----------------------------------------------------------------
+      // LOCAL FALLBACK: session log read (zero network, always attempted
+      // when network is unavailable / no accountId / breaker active)
+      // ----------------------------------------------------------------
+      const localQuota = await getCodex();
+      if (localQuota) {
+        const row = buildCodexRow(localQuota, now);
+        state.cachedRow = row;
+        state.cachedAt = now;
+        return { ...row, cached: false };
+      }
+
+      // No local data either: serve stale (may be null).
+      return serveCached(state);
+    } catch {
+      // Network/parse rejection -> treat as transient, serve stale.
+      const backoff = computeBackoffMs(state.backoffAttempt);
+      state.cooldownUntil = now + backoff;
+      state.backoffAttempt += 1;
+      return serveCached(state);
+    } finally {
+      state.pending = null;
+    }
+  })();
+
+  return state.pending;
 }
 
 // ============================================================================
@@ -443,15 +654,38 @@ async function collectCodexRow(deps: NativeQuotaDeps): Promise<BarSummaryRow | n
  *
  * Each path is independently try/caught so one failing source never blocks the
  * other or the response. Returns only rows that represent real data.
+ *
+ * `opts.force` bypasses the TTL short-circuit on both paths so a debounce-
+ * passing refresh re-pulls native rows live. The circuit breaker is always
+ * respected regardless of force (account protection).
  */
-export async function getNativeAccountRows(deps: NativeQuotaDeps = {}): Promise<BarSummaryRow[]> {
+export async function getNativeAccountRows(
+  deps: NativeQuotaDeps = {},
+  opts?: { force?: boolean }
+): Promise<BarSummaryRow[]> {
+  const force = opts?.force ?? false;
   const [claude, codex] = await Promise.all([
-    collectClaudeRow(deps).catch(() => null),
-    collectCodexRow(deps).catch(() => null),
+    collectClaudeRow(deps, force).catch(() => null),
+    collectCodexRow(deps, force).catch(() => null),
   ]);
 
   const rows: BarSummaryRow[] = [];
   if (claude) rows.push(claude);
   if (codex) rows.push(codex);
+  return rows;
+}
+
+/**
+ * Last-known native rows from cache, WITHOUT any fetch (instant, no network).
+ *
+ * Used as a non-blocking fallback by /summary: when a forced live re-pull
+ * overruns the native side-load budget, the response serves these cached rows
+ * instead of dropping the Claude/Codex cards entirely. The in-flight fetch keeps
+ * warming the cache, so the next poll shows the fresh values.
+ */
+export function getCachedNativeAccountRows(): BarSummaryRow[] {
+  const rows: BarSummaryRow[] = [];
+  if (claudeState.cachedRow) rows.push({ ...claudeState.cachedRow, cached: true });
+  if (codexState.cachedRow) rows.push({ ...codexState.cachedRow, cached: true });
   return rows;
 }

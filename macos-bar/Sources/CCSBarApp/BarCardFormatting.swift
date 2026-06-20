@@ -51,4 +51,57 @@ enum BarCardFormatting {
     fmt.dateFormat = "HH:mm"
     return fmt.string(from: date)
   }
+
+  // MARK: - Axis label formatters (used by BarAnalyticsView spend chart)
+
+  /// Short hour label from a byHour key "YYYY-MM-DD HH:00", e.g. "12a", "6p".
+  /// Extracts the HH part (characters at index 11-12) and converts to 12-hour
+  /// format with lowercase "a"/"p" suffix. Returns nil for unparseable keys.
+  static func hourShort(fromHourKey key: String) -> String? {
+    // key format: "YYYY-MM-DD HH:00" — HH is at offset 11, length 2.
+    guard key.count >= 13 else { return nil }
+    let start = key.index(key.startIndex, offsetBy: 11)
+    let end = key.index(start, offsetBy: 2)
+    guard let hour = Int(key[start..<end]) else { return nil }
+    switch hour {
+    case 0: return "12a"
+    case 1..<12: return "\(hour)a"
+    case 12: return "12p"
+    default: return "\(hour - 12)p"
+    }
+  }
+
+  /// Short weekday label from a byDay key "YYYY-MM-DD", e.g. "Mon".
+  /// Returns nil for unparseable keys. Formats in UTC to match how `dayDate`
+  /// parses the key, so the weekday names the calendar day the key represents
+  /// (formatting in local time would shift it a day for users west of UTC).
+  static func weekdayShort(fromDayKey key: String) -> String? {
+    guard let date = dayDate(fromKey: key) else { return nil }
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
+    fmt.timeZone = TimeZone(identifier: "UTC")
+    fmt.dateFormat = "EEE"
+    return fmt.string(from: date)
+  }
+
+  /// Short month+day label from a byDay key "YYYY-MM-DD", e.g. "Jun 5".
+  /// Returns nil for unparseable keys. Formats in UTC to match `dayDate`'s
+  /// parse zone so the label names the same calendar day as the key.
+  static func monthDayShort(fromDayKey key: String) -> String? {
+    guard let date = dayDate(fromKey: key) else { return nil }
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
+    fmt.timeZone = TimeZone(identifier: "UTC")
+    fmt.dateFormat = "MMM d"
+    return fmt.string(from: date)
+  }
+
+  /// Parse a "YYYY-MM-DD" key into a Date at midnight UTC.
+  private static func dayDate(fromKey key: String) -> Date? {
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
+    fmt.timeZone = TimeZone(identifier: "UTC")
+    fmt.dateFormat = "yyyy-MM-dd"
+    return fmt.date(from: key)
+  }
 }

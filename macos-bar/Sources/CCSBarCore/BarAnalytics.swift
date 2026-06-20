@@ -57,6 +57,20 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     }
   }
 
+  /// Spend and request count for one hour of today. 24 entries, zero-filled,
+  /// oldest (00:00) to newest (23:00). The `hour` key is "YYYY-MM-DD HH:00".
+  public struct Hour: Codable, Sendable, Equatable, Identifiable {
+    public let hour: String
+    public let cost: Double
+    public let requests: Int
+    public var id: String { hour }
+    public init(hour: String, cost: Double, requests: Int) {
+      self.hour = hour
+      self.cost = cost
+      self.requests = requests
+    }
+  }
+
   public let today: Window
   public let last7d: Window
   public let last30d: Window
@@ -67,6 +81,9 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
   public let allTime: Window
   /// Oldest → newest, exactly 30 zero-filled entries, for the sparkline.
   public let byDay: [Day]
+  /// Today's hourly breakdown: 24 entries, oldest (00:00) → newest (23:00),
+  /// zero-filled. Absent from older payloads; defaults to [].
+  public let byHour: [Hour]
   public let topModels: [Model]
   /// "30d" when recent data exists, else "all".
   public let topModelsWindow: String
@@ -90,6 +107,7 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     monthToDate: Window = Window(cost: 0, requests: 0),
     allTime: Window,
     byDay: [Day],
+    byHour: [Hour] = [],
     topModels: [Model],
     topModelsWindow: String,
     lastActivityAt: String? = nil,
@@ -104,6 +122,7 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
     self.monthToDate = monthToDate
     self.allTime = allTime
     self.byDay = byDay
+    self.byHour = byHour
     self.topModels = topModels
     self.topModelsWindow = topModelsWindow
     self.lastActivityAt = lastActivityAt
@@ -127,6 +146,9 @@ public struct BarAnalytics: Codable, Sendable, Equatable {
       (try c.decodeIfPresent(Window.self, forKey: .monthToDate)) ?? Window(cost: 0, requests: 0)
     allTime = try c.decode(Window.self, forKey: .allTime)
     byDay = try c.decode([Day].self, forKey: .byDay)
+    // `byHour` is a new field; older payloads omit it. Default to [] so cached
+    // or older-backend payloads decode cleanly without throwing.
+    byHour = (try c.decodeIfPresent([Hour].self, forKey: .byHour)) ?? []
     topModels = try c.decode([Model].self, forKey: .topModels)
     topModelsWindow = try c.decode(String.self, forKey: .topModelsWindow)
     lastActivityAt = try c.decodeIfPresent(String.self, forKey: .lastActivityAt)

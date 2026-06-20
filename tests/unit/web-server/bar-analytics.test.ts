@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import {
   computeBarAnalytics,
   computeBarAnalyticsFromDaily,
+  localDayKey,
 } from '../../../src/web-server/usage/bar-analytics';
 import type { CliproxyUsageHistoryDetail } from '../../../src/web-server/usage/cliproxy-usage-transformer';
 import type { DailyUsage, HourlyUsage } from '../../../src/web-server/usage/types';
@@ -249,5 +250,132 @@ describe('computeBarAnalyticsFromDaily — monthToDate', () => {
   it('returns zeroed monthToDate for empty daily and hourly input', () => {
     const a = computeBarAnalyticsFromDaily([], [], NOW);
     expect(a.monthToDate).toEqual({ cost: 0, requests: 0 });
+  });
+});
+
+// ============================================================================
+// byHour — 24-bucket intra-day spend chart for today
+// ============================================================================
+
+describe('byHour — intra-day spend chart', () => {
+  // NOW = 2026-06-08T12:00:00-04:00. byHour buckets are the user's LOCAL clock
+  // hours; the pipeline's hour keys are UTC and get converted to local. These
+  // tests build UTC keys FROM the desired local time so they pass regardless of
+  // the test runner's timezone (the round-trip is machine-TZ-independent).
+  const todayKey = localDayKey(NOW);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+
+  /** A machine-local Date at `hour` o'clock on NOW's local calendar day (+dayOffset). */
+  function localDayAt(hour: number, dayOffset = 0): Date {
+    return new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + dayOffset, hour, 0, 0);
+  }
+
+  /** The UTC "YYYY-MM-DD HH:00" key that converts back to `local`'s clock hour. */
+  function utcHourKeyForLocal(local: Date): string {
+    return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(
+      local.getUTCDate()
+    )} ${pad(local.getUTCHours())}:00`;
+  }
+
+  it('computeBarAnalytics returns byHour as empty array (snapshot path has no hourly)', () => {
+    const a = computeBarAnalytics([], NOW);
+    expect(Array.isArray(a.byHour)).toBe(true);
+    expect(a.byHour).toHaveLength(0);
+  });
+
+  it('computeBarAnalyticsFromDaily returns exactly 24 hour buckets', () => {
+    const a = computeBarAnalyticsFromDaily([], [], NOW);
+    expect(a.byHour).toHaveLength(24);
+  });
+
+  it('hour buckets are LOCAL, ordered 00:00 → 23:00', () => {
+    const a = computeBarAnalyticsFromDaily([], [], NOW);
+    expect(a.byHour[0].hour).toBe(`${todayKey} 00:00`);
+    expect(a.byHour[23].hour).toBe(`${todayKey} 23:00`);
+    for (let i = 1; i < 24; i++) {
+      expect(a.byHour[i].hour > a.byHour[i - 1].hour).toBe(true);
+    }
+  });
+
+  it('hours with no data are zero-filled', () => {
+    const a = computeBarAnalyticsFromDaily([], [], NOW);
+    for (const h of a.byHour) {
+      expect(h.cost).toBe(0);
+      expect(h.requests).toBe(0);
+    }
+  });
+
+  it('a UTC hour key lands in the matching LOCAL hour bucket (not the raw UTC hour)', () => {
+    // Activity at local 10:00 today, encoded as its UTC key.
+    const a = computeBarAnalyticsFromDaily(
+      [],
+      [
+        hourly({ hour: utcHourKeyForLocal(localDayAt(10)), totalCost: 3.5, requestCount: 2 }),
+        hourly({ hour: utcHourKeyForLocal(localDayAt(14)), totalCost: 1.0, requestCount: 1 }),
+      ],
+      NOW
+    );
+    expect(a.byHour[10].hour).toBe(`${todayKey} 10:00`);
+    expect(a.byHour[10].cost).toBeCloseTo(3.5);
+    expect(a.byHour[10].requests).toBe(2);
+    expect(a.byHour[14].cost).toBeCloseTo(1.0);
+    expect(a.byHour[14].requests).toBe(1);
+  });
+
+  it('late local-evening activity (next day in UTC) still lands in TODAY', () => {
+    // local 23:00 today is the next calendar day in any UTC-negative zone; it
+    // must NOT be dropped from today's chart (regression guard for the TZ bug).
+    const a = computeBarAnalyticsFromDaily(
+      [],
+      [hourly({ hour: utcHourKeyForLocal(localDayAt(23)), totalCost: 7, requestCount: 4 })],
+      NOW
+    );
+    expect(a.byHour[23].cost).toBeCloseTo(7);
+    expect(a.byHour[23].requests).toBe(4);
+    // Every other hour stays zero.
+    for (let i = 0; i < 23; i++) expect(a.byHour[i].cost).toBe(0);
+  });
+
+  it('yesterday-local activity does NOT land in today buckets', () => {
+    const a = computeBarAnalyticsFromDaily(
+      [],
+      [hourly({ hour: utcHourKeyForLocal(localDayAt(10, -1)), totalCost: 99, requestCount: 10 })],
+      NOW
+    );
+    for (const h of a.byHour) {
+      expect(h.cost).toBe(0);
+      expect(h.requests).toBe(0);
+    }
+  });
+
+  it('accumulates multiple sources into the same local hour bucket', () => {
+    const key = utcHourKeyForLocal(localDayAt(9));
+    const a = computeBarAnalyticsFromDaily(
+      [],
+      [
+        hourly({ hour: key, source: 'custom-parser', totalCost: 2.0, requestCount: 3 }),
+        hourly({ hour: key, source: 'codex-native', totalCost: 1.5, requestCount: 1 }),
+      ],
+      NOW
+    );
+    expect(a.byHour[9].cost).toBeCloseTo(3.5);
+    expect(a.byHour[9].requests).toBe(4);
+  });
+
+  it('prefers finite totalCost over cost (0 is a valid total)', () => {
+    const a = computeBarAnalyticsFromDaily(
+      [],
+      [
+        hourly({
+          hour: utcHourKeyForLocal(localDayAt(11)),
+          cost: 2.2,
+          totalCost: 0,
+          requestCount: 1,
+        }),
+      ],
+      NOW
+    );
+    // totalCost = 0 is finite so it wins — the bucket stays 0.
+    expect(a.byHour[11].cost).toBeCloseTo(0);
   });
 });

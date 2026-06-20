@@ -26,6 +26,11 @@ struct BarAnalyticsView: View {
   /// Spend header (using the otherwise-blank space) so the user switches
   /// bars/line in place rather than digging into Settings. nil for `.breakdown`.
   var onToggleSpendStyle: (() -> Void)? = nil
+  /// Selected time window for the spend chart. Default .last7d so the rolling
+  /// 7-day view is the startup default, matching SpendPeriodStore's default.
+  var spendPeriod: SpendPeriod = .last7d
+  /// Callback when the user taps a period selector button. nil for .breakdown.
+  var onSelectPeriod: ((SpendPeriod) -> Void)? = nil
 
   private var lastActive: String? {
     BarFormatting.lastActiveLabel(
@@ -71,14 +76,20 @@ struct BarAnalyticsView: View {
     !analytics.bySurface.isEmpty || !analytics.topModels.isEmpty
   }
 
-  /// The collapsed informational spend strip: a "SPEND" label, one muted caption
-  /// line, and a thin inline 30-day sparkline when there is real spend.
+  /// The informational spend strip: a "SPEND" label, period selector,
+  /// bars/line toggle, a muted caption, a taller sparkline, and axis labels.
   private var spendStrip: some View {
     VStack(alignment: .leading, spacing: 5) {
+      // Header row: section label | period selector | bars/line toggle.
       HStack(spacing: 6) {
         SectionLabel("Spend")
         Spacer()
-        // Inline bars/line toggle in the header's blank space — no Settings trip.
+        // Compact 3-segment period selector — only when there is data to chart,
+        // so the idle state shows no controls that would have no visible effect.
+        if let select = onSelectPeriod, analytics.hasRecentData {
+          periodSelector(onSelect: select)
+        }
+        // Inline bars/line toggle — only when there is data to render.
         if let toggle = onToggleSpendStyle, analytics.hasRecentData, !sparklineIsEmpty {
           Button(action: toggle) {
             Image(
@@ -92,16 +103,16 @@ struct BarAnalyticsView: View {
           .help("Spend graph: switch to \(spendChartStyle == .bars ? "line" : "bars")")
         }
       }
+
       if analytics.hasRecentData {
         Text(spendCaption)
           .font(.caption2)
           .foregroundStyle(.secondary)
-        if !sparklineIsEmpty {
-          // height: 30 (up from 18) so daily spend gradations are clearly readable.
-          Sparkline(values: analytics.byDay.map(\.cost), accent: theme.accent,
-                    style: spendChartStyle)
-            .frame(height: 30)
-        }
+        // height: 56 — more room so per-hour or per-day gradations are readable.
+        Sparkline(values: activeSeries, accent: theme.accent, style: spendChartStyle)
+          .frame(height: 56)
+        // Axis labels below the chart, aligned to the same width.
+        axisLabelRow
       } else {
         Text(idleCaption)
           .font(.caption2)
@@ -110,11 +121,129 @@ struct BarAnalyticsView: View {
     }
   }
 
-  /// One-line rollup: "today $NN · 7d $N.Nk · 30d $N.Nk".
+  /// Small 3-button period selector: "Today / 7d / 30d".
+  private func periodSelector(onSelect: @escaping (SpendPeriod) -> Void) -> some View {
+    HStack(spacing: 4) {
+      periodButton("Today", period: .today, onSelect: onSelect)
+      periodButton("7d", period: .last7d, onSelect: onSelect)
+      periodButton("30d", period: .last30d, onSelect: onSelect)
+    }
+  }
+
+  private func periodButton(
+    _ label: String, period: SpendPeriod, onSelect: @escaping (SpendPeriod) -> Void
+  ) -> some View {
+    Button(label) { onSelect(period) }
+      .buttonStyle(.borderless)
+      .font(
+        spendPeriod == period
+          ? .system(size: 10, weight: .semibold)
+          : .system(size: 10))
+      .foregroundStyle(spendPeriod == period ? theme.accent : Color.secondary)
+  }
+
+  /// The value series for the currently-selected period.
+  private var activeSeries: [Double] {
+    switch spendPeriod {
+    case .today:
+      return analytics.byHour.map(\.cost)
+    case .last7d:
+      return Array(analytics.byDay.suffix(7)).map(\.cost)
+    case .last30d:
+      return analytics.byDay.map(\.cost)
+    }
+  }
+
+  /// Caption showing the cost for the active period. Each period sums the SAME
+  /// series it charts so the caption total always matches the visible bars.
   private var spendCaption: String {
-    "today \(BarFormatting.money(analytics.today.cost))"
-      + " · 7d \(BarFormatting.money(analytics.last7d.cost))"
-      + " · 30d \(BarFormatting.money(analytics.last30d.cost))"
+    switch spendPeriod {
+    case .today:
+      // Sum byHour (the charted series) so caption == bars. Fall back to the
+      // daily today total only when there is no hourly series to draw.
+      let cost =
+        analytics.byHour.isEmpty
+        ? analytics.today.cost
+        : analytics.byHour.reduce(0) { $0 + $1.cost }
+      return "today \(BarFormatting.money(cost))"
+    case .last7d:
+      let cost = Array(analytics.byDay.suffix(7)).reduce(0) { $0 + $1.cost }
+      return "7d \(BarFormatting.money(cost))"
+    case .last30d:
+      return "30d \(BarFormatting.money(analytics.last30d.cost))"
+    }
+  }
+
+  /// Axis labels rendered below the sparkline. Each tick is placed at its data
+  /// point's horizontal fraction (bar-center) so the label sits under the hour /
+  /// day it names — not merely evenly distributed, which drifts on the Today
+  /// view where the tick indices aren't at even fractions of the width. Edge
+  /// labels are clamped inward by their estimated half-width so they don't clip.
+  @ViewBuilder private var axisLabelRow: some View {
+    let ticks = axisTicks(for: spendPeriod)
+    if !ticks.isEmpty {
+      GeometryReader { geo in
+        let width = Double(geo.size.width)
+        ForEach(Array(ticks.enumerated()), id: \.offset) { _, tick in
+          // ~2.75pt per char at 9pt monospaced is half a glyph; clamp keeps the
+          // first/last labels fully on-screen.
+          let halfW = max(8.0, Double(tick.label.count) * 2.75)
+          let x = min(max(tick.fraction * width, halfW), max(halfW, width - halfW))
+          Text(tick.label)
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .fixedSize()
+            .position(x: x, y: 6)
+        }
+      }
+      .frame(height: 12)
+    }
+  }
+
+  /// Tick (label, horizontal fraction 0...1) pairs for the current period.
+  /// Fraction is the bar CENTER ((i + 0.5) / count) so labels align under the
+  /// default bar chart; for the line style the end ticks differ by half a bar,
+  /// which is visually negligible.
+  private func axisTicks(for period: SpendPeriod) -> [(label: String, fraction: Double)] {
+    func center(_ i: Int, _ n: Int) -> Double { n > 0 ? (Double(i) + 0.5) / Double(n) : 0 }
+    switch period {
+    case .today:
+      // Hours at 0, 6, 12, 18, 23 — only those that exist.
+      let hours = analytics.byHour
+      guard !hours.isEmpty else { return [] }
+      let n = hours.count
+      return [0, 6, 12, 18, 23].compactMap { idx -> (String, Double)? in
+        guard idx < n, let label = BarCardFormatting.hourShort(fromHourKey: hours[idx].hour)
+        else { return nil }
+        return (label, center(idx, n))
+      }
+
+    case .last7d:
+      // All 7 days (or whatever suffix(7) yields): short weekday "Mon".
+      let days = Array(analytics.byDay.suffix(7))
+      guard !days.isEmpty else { return [] }
+      let n = days.count
+      return days.enumerated().compactMap { (i, d) -> (String, Double)? in
+        guard let label = BarCardFormatting.weekdayShort(fromDayKey: d.date) else { return nil }
+        return (label, center(i, n))
+      }
+
+    case .last30d:
+      // 5 evenly-spaced "MMM d" labels: first, ~1/4, mid, ~3/4, last.
+      let days = analytics.byDay
+      guard days.count >= 2 else { return [] }
+      let n = days.count
+      let last = n - 1
+      let indices = [0, last / 4, last / 2, last * 3 / 4, last].reduce(into: [Int]()) { acc, i in
+        if acc.last != i { acc.append(i) }
+      }
+      return indices.compactMap { i -> (String, Double)? in
+        guard i < n, let label = BarCardFormatting.monthDayShort(fromDayKey: days[i].date)
+        else { return nil }
+        return (label, center(i, n))
+      }
+    }
   }
 
   /// Honest idle caption when there's no recent spend, folding in last-active.
@@ -125,8 +254,10 @@ struct BarAnalyticsView: View {
     return headline
   }
 
+  /// True when the active period's series is all zero. Still shows the chart
+  /// frame + axis (do not hide them), but the bars/line toggle is suppressed.
   private var sparklineIsEmpty: Bool {
-    analytics.byDay.allSatisfy { $0.cost <= 0 }
+    activeSeries.allSatisfy { $0 <= 0 }
   }
 }
 

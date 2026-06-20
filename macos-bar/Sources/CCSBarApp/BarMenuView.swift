@@ -92,8 +92,8 @@ struct BarMenuView: View {
             accountsSection
 
             // (3) SPEND — demoted to a thin informational strip below the cockpit.
-            // spendChartStyle is threaded from the viewModel and toggled inline
-            // from the Spend header, so a change updates the chart immediately.
+            // spendChartStyle and spendPeriod are threaded from the viewModel and
+            // toggled/selected inline from the Spend header so changes are live.
             if let analytics = viewModel.analytics {
               Divider()
               BarAnalyticsView(
@@ -102,7 +102,9 @@ struct BarMenuView: View {
                 onToggleSpendStyle: {
                   viewModel.spendChartStyle =
                     viewModel.spendChartStyle == .bars ? .line : .bars
-                })
+                },
+                spendPeriod: viewModel.spendPeriod,
+                onSelectPeriod: { viewModel.spendPeriod = $0 })
             }
 
             // (4) POOL ACCOUNTS — compact generic rows, subordinate.
@@ -185,7 +187,7 @@ struct BarMenuView: View {
       } else {
         subscriptionsHeader(parts.subscriptions)
         ForEach(orderedSubscriptions(parts.subscriptions)) { row in
-          BarSubscriptionCard(row: row)
+          BarSubscriptionCard(row: row, onRefresh: { viewModel.forceRefresh() })
         }
       }
     }
@@ -341,7 +343,7 @@ struct BarMenuView: View {
       .help("Settings — appearance/theme, menu-bar glance, and alerts")
       Spacer()
       Button {
-        viewModel.onOpen()
+        viewModel.forceRefresh()
       } label: {
         Image(systemName: "arrow.clockwise")
       }

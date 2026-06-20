@@ -16,6 +16,9 @@ struct BarSubscriptionCard: View {
   /// Injected clock — defaults to live Date() in production, pinned in previews
   /// and tests so countdown math is deterministic.
   var now: Date = Date()
+  /// Optional force-refresh action. When provided, the stale footnote appends a
+  /// compact inline refresh button so the user can reload without reopening menus.
+  var onRefresh: (() -> Void)? = nil
 
   private var windows: [QuotaWindowDetail] { row.quotaWindows ?? [] }
 
@@ -219,6 +222,8 @@ struct BarSubscriptionCard: View {
 
   /// "as of HH:mm (older session)" caption when the Codex reading came from an
   /// older session. The bar still renders — the data is real, just not live.
+  /// When `onRefresh` is provided, a compact inline refresh button trails the
+  /// caption so the user can force-reload without extra navigation.
   @ViewBuilder private var staleFootnote: some View {
     if let stale = row.staleAsOf, let clock = BarCardFormatting.clockTime(iso: stale) {
       HStack(spacing: 4) {
@@ -228,6 +233,15 @@ struct BarSubscriptionCard: View {
         Text("as of \(clock), older session")
           .font(.caption2)
           .foregroundStyle(.tertiary)
+        if let refresh = onRefresh {
+          Button(action: refresh) {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 9))
+          }
+          .buttonStyle(.borderless)
+          .foregroundStyle(.tertiary)
+          .help("Force refresh to get the latest data")
+        }
       }
     }
   }

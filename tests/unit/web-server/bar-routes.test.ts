@@ -988,6 +988,137 @@ describe('today_cost: duplicate-email accounts get null (finding #11)', () => {
 });
 
 // ============================================================================
+// force flag threading: refresh=true passes {force:true} to getNativeAccountRows
+// ============================================================================
+
+describe('/summary force flag passed to getNativeAccountRows', () => {
+  async function buildForceFlagRouter(
+    onNativeCall: (opts: { force?: boolean } | undefined) => void
+  ) {
+    const { createBarRouter, resetForceFreshDebounce: resetDebounce } = await import(
+      '../../../src/web-server/routes/bar-routes'
+    );
+
+    const app = express();
+    app.use(express.json());
+
+    const router = createBarRouter({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getAllAccountsSummary: () => ({ agy: [makeAccountInfo()] }) as any,
+      getCachedQuota: () => makeQuotaResult(),
+      setCachedQuota: () => {},
+      invalidateQuotaCache: () => {},
+      fetchAccountQuota: async () => makeQuotaResult(),
+      getTodayCostByAccount: () => ({}),
+      loadCliproxyDetails: async () => [],
+      loadDailyUsage: async () => [],
+      loadHourlyUsage: async () => [],
+      runHealthChecks: async () => makeHealthReport(),
+      getNativeAccountRows: async (opts) => {
+        onNativeCall(opts);
+        return [];
+      },
+    });
+
+    app.use('/api/bar', router);
+    const srv = await new Promise<Server>((resolve, reject) => {
+      const instance = app.listen(0, '127.0.0.1');
+      instance.once('error', reject);
+      instance.once('listening', () => resolve(instance));
+    });
+    const addr = srv.address();
+    if (!addr || typeof addr === 'string') throw new Error('No server address');
+    resetDebounce();
+    return { srv, url: `http://127.0.0.1:${(addr as { port: number }).port}` };
+  }
+
+  it('refresh=true (after debounce reset) passes { force: true } to getNativeAccountRows', async () => {
+    const calls: Array<{ force?: boolean } | undefined> = [];
+    const { srv, url } = await buildForceFlagRouter((opts) => calls.push(opts));
+
+    await getJson<BarSummaryRow[]>(url, '/api/bar/summary?refresh=true');
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+
+    expect(calls.length).toBeGreaterThan(0);
+    // The first (and only) call must carry force: true
+    expect(calls[0]?.force).toBe(true);
+  });
+
+  it('refresh=false (no query param) passes { force: false } to getNativeAccountRows', async () => {
+    const calls: Array<{ force?: boolean } | undefined> = [];
+    const { srv, url } = await buildForceFlagRouter((opts) => calls.push(opts));
+
+    await getJson<BarSummaryRow[]>(url, '/api/bar/summary');
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+
+    expect(calls.length).toBeGreaterThan(0);
+    // No refresh param → doForceRefresh is false
+    expect(calls[0]?.force).toBe(false);
+  });
+
+  it('falls back to cached native rows when the live native side-load fails (cards do not vanish)', async () => {
+    const { createBarRouter, resetForceFreshDebounce: resetDebounce } = await import(
+      '../../../src/web-server/routes/bar-routes'
+    );
+    const cachedCodex: BarSummaryRow = {
+      account_id: 'codex',
+      provider: 'codex',
+      displayName: 'Codex',
+      tier: 'pro',
+      paused: false,
+      quota_percentage: 42,
+      quotaStatus: 'ok',
+      next_reset: null,
+      is_default: false,
+      last_activity_at: null,
+      today_cost: null,
+      health: 'ok',
+      cached: true,
+      fetchedAt: '2026-06-09T14:00:00.000Z',
+      needsReauth: false,
+    };
+
+    const app = express();
+    app.use(express.json());
+    const router = createBarRouter({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getAllAccountsSummary: () => ({ agy: [makeAccountInfo()] }) as any,
+      getCachedQuota: () => makeQuotaResult(),
+      setCachedQuota: () => {},
+      invalidateQuotaCache: () => {},
+      fetchAccountQuota: async () => makeQuotaResult(),
+      getTodayCostByAccount: () => ({}),
+      loadCliproxyDetails: async () => [],
+      loadDailyUsage: async () => [],
+      loadHourlyUsage: async () => [],
+      runHealthChecks: async () => makeHealthReport(),
+      // Live native fetch unavailable → withTimeout resolves null → fallback.
+      getNativeAccountRows: async () => {
+        throw new Error('native unavailable');
+      },
+      getCachedNativeRows: () => [cachedCodex],
+    });
+    app.use('/api/bar', router);
+    const srv = await new Promise<Server>((resolve, reject) => {
+      const instance = app.listen(0, '127.0.0.1');
+      instance.once('error', reject);
+      instance.once('listening', () => resolve(instance));
+    });
+    const addr = srv.address();
+    if (!addr || typeof addr === 'string') throw new Error('No server address');
+    resetDebounce();
+    const url = `http://127.0.0.1:${(addr as { port: number }).port}`;
+
+    const { status, body } = await getJson<BarSummaryRow[]>(url, '/api/bar/summary?refresh=true');
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+
+    // Response is healthy and the cached Codex row is served, not dropped.
+    expect(status).toBe(200);
+    expect(body.some((r) => r.provider === 'codex')).toBe(true);
+  });
+});
+
+// ============================================================================
 // Native subscription rows side-load into /summary
 // ============================================================================
 
