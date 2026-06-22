@@ -11,6 +11,7 @@ import * as path from 'path';
 import { initUI, header, color, dim, ok, fail, warn, info } from '../../utils/ui';
 import { InteractivePrompt } from '../../utils/prompt';
 import { getClaudeSettingsPath } from '../../utils/claude-config-path';
+import { ConfigError } from '../../errors';
 import {
   formatDisplayPath,
   getClaudeSettingsDisplayPath,
@@ -84,6 +85,14 @@ export async function createBackup(): Promise<string> {
   const settingsPath = getClaudeSettingsPath();
   if (!(await pathExists(settingsPath))) {
     throw new Error('No settings.json to backup');
+  }
+
+  // Guard: refuse to read a symlinked settings.json (TOCTOU mitigation on backup read).
+  if (await isSymlinkAsync(settingsPath)) {
+    throw new ConfigError(
+      'settings.json is a symlink - refusing to read for backup for security',
+      settingsPath
+    );
   }
 
   const settingsContent = await readFileUtf8NoFollow(settingsPath);
