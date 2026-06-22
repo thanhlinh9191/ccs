@@ -250,7 +250,7 @@ export async function handleCliproxyCommand(args: string[]): Promise<void> {
     start: async () => handleStart(verbose),
     stop: async () => handleStop(),
     restart: async () => handleRestart(verbose),
-    status: async () => handleProxyStatus(),
+    status: async () => handleProxyStatus(verbose),
     doctor: async () => handleDoctor(verbose),
     diag: async () => handleDoctor(verbose),
     default: async () => handleSetDefault(remainingArgs.slice(1)),

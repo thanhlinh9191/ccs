@@ -66,7 +66,7 @@ export async function handleRestart(verbose = false): Promise<void> {
   console.log('');
 }
 
-export async function handleProxyStatus(): Promise<void> {
+export async function handleProxyStatus(verbose = false): Promise<void> {
   await initUI();
   console.log(header('CLIProxy Status'));
   console.log('');
@@ -80,7 +80,17 @@ export async function handleProxyStatus(): Promise<void> {
     console.log(`  Sessions:   ${status.sessionCount || 0} active`);
     if (status.startedAt) {
       console.log(`  Started:    ${new Date(status.startedAt).toLocaleString()}`);
+      if (verbose) {
+        const uptimeMs = Date.now() - new Date(status.startedAt).getTime();
+        const uptimeSec = Math.floor(uptimeMs / 1000);
+        const h = Math.floor(uptimeSec / 3600);
+        const m = Math.floor((uptimeSec % 3600) / 60);
+        const s = uptimeSec % 60;
+        const uptimeStr = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+        console.log(`  Uptime:     ${uptimeStr}`);
+      }
     }
+
     console.log('');
     console.log(dim('To stop: ccs cliproxy stop'));
   } else {
@@ -93,6 +103,9 @@ export async function handleProxyStatus(): Promise<void> {
       console.log(`  Sessions:   ${detected.sessionCount || 0} active`);
       if (!detected.sessionCount) {
         console.log(dim('  Note: Detected running proxy without local session lock'));
+      }
+      if (verbose) {
+        console.log(dim('  Note: Process detected via port scan; no local lock file present'));
       }
       console.log('');
       console.log(dim('To stop: ccs cliproxy stop'));
