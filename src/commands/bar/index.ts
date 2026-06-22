@@ -66,6 +66,7 @@ export async function handleBarCommand(args: string[]): Promise<void> {
   if (!handler) {
     console.error(`[X] Unknown bar subcommand: ${subcommand}`);
     console.error('[i] Usage: ccs bar [launch|serve|stop|status|install|uninstall|version|--help]');
+    process.exitCode = 1;
     return;
   }
 
