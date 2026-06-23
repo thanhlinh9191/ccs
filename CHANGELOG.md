@@ -1,3 +1,9 @@
+## [8.6.1](https://github.com/kaitranntt/ccs/compare/v8.6.0...v8.6.1) (2026-06-23)
+
+### Bug Fixes
+
+* **bar:** update release target when publishing app ([999f130](https://github.com/kaitranntt/ccs/commit/999f130e4b4ab2aba919527558f300b2e0f83426))
+
 ## [8.6.0](https://github.com/kaitranntt/ccs/compare/v8.5.0...v8.6.0) (2026-06-23)
 
 ### Features
