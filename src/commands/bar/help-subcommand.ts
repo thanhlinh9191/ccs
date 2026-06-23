@@ -34,6 +34,10 @@ export async function showHelp(): Promise<void> {
       [
         ['--launch', 'Launch CCS Bar immediately after install without prompting'],
         ['--no-launch', 'Skip the launch prompt after install'],
+        [
+          '--await-quit',
+          'Wait for a running CCS Bar to quit, then swap and relaunch (used by the in-app updater)',
+        ],
       ],
     ],
     [

@@ -1664,6 +1664,28 @@ do {
   check(port3000Count == 1, "probe: bar.json port 3000 deduped — probed once, not twice")
 }
 
+// (BarUpdateChecker) Semver comparison drives the in-app "Update available"
+//   affordance, so ordering must be numeric (1.10.0 > 1.9.0), tolerate
+//   pre-release suffixes, and reject malformed input.
+do {
+  check(BarUpdateChecker.isNewer("1.8.0", than: "1.7.0"), "isNewer: newer minor (1.8.0 > 1.7.0)")
+  check(BarUpdateChecker.isNewer("1.7.1", than: "1.7.0"), "isNewer: newer patch (1.7.1 > 1.7.0)")
+  check(BarUpdateChecker.isNewer("2.0.0", than: "1.9.9"), "isNewer: newer major (2.0.0 > 1.9.9)")
+  check(
+    BarUpdateChecker.isNewer("1.10.0", than: "1.9.0"),
+    "isNewer: numeric not lexicographic (1.10.0 > 1.9.0)")
+  check(!BarUpdateChecker.isNewer("1.7.0", than: "1.7.0"), "isNewer: equal is not newer")
+  check(!BarUpdateChecker.isNewer("1.6.0", than: "1.7.0"), "isNewer: older is not newer")
+  check(
+    BarUpdateChecker.isNewer("1.8.0-beta.1", than: "1.7.0"),
+    "isNewer: pre-release suffix stripped, core still newer")
+  check(
+    !BarUpdateChecker.isNewer("1.7.0-beta.1", than: "1.7.0"),
+    "isNewer: equal core after stripping suffix is not newer")
+  check(!BarUpdateChecker.isNewer("garbage", than: "1.7.0"), "isNewer: malformed latest rejected")
+  check(!BarUpdateChecker.isNewer("1.7", than: "1.7.0"), "isNewer: fewer than 3 parts rejected")
+}
+
 // cleanup
 try? FileManager.default.removeItem(atPath: tmp)
 

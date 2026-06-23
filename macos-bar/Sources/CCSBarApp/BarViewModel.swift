@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import CCSBarCore
@@ -42,6 +43,18 @@ final class BarViewModel: ObservableObject {
   /// dropdown so users who deny notifications still see the conditions.
   @Published var activeAlerts: [BarNotification] = []
 
+  // MARK: - Update state
+
+  /// Set to `true` when a newer published release is detected. Drives the
+  /// "Update available" affordance in `BarMenuView`.
+  @Published var updateAvailable: Bool = false
+  /// The remote version string, e.g. `"1.8.0"`. Non-nil only while
+  /// `updateAvailable` is true.
+  @Published var latestVersion: String? = nil
+  /// True while the installer process is being launched. Disables the button
+  /// and shows a progress label so the user knows the action fired.
+  @Published var isInstallingUpdate: Bool = false
+
   private let home: String
   private var client: CCSBarClient?
   private var debouncer = RefreshDebouncer(interval: 15)
@@ -52,6 +65,11 @@ final class BarViewModel: ObservableObject {
   private var pollTask: Task<Void, Never>?
   /// Guard against overlapping start-and-connect sequences.
   private var connectTask: Task<Void, Never>?
+  /// Background update-check task — kept so it can be cancelled on deinit.
+  private var updateCheckTask: Task<Void, Never>?
+  /// Tracks when the last successful remote version check ran so we never
+  /// hammer the release URL more than once every 6 hours.
+  private var lastUpdateCheckDate: Date? = nil
   private let prefs: BarPreferences
   private let notifier: NotificationDelivering
   private let probe: BarServerProbe
@@ -79,6 +97,7 @@ final class BarViewModel: ObservableObject {
     self.spendPeriod = SpendPeriodStore.load()
     reconnect()
     startBackgroundPolling()
+    startUpdateChecking()
   }
 
   // MARK: - Background polling
@@ -96,6 +115,105 @@ final class BarViewModel: ObservableObject {
         await self.reconnectIfNeeded()
         await self.load(force: false)
       }
+    }
+  }
+
+  // MARK: - Update checking
+
+  /// Minimum interval between remote version checks (6 hours in seconds).
+  private static let updateCheckInterval: TimeInterval = 6 * 60 * 60
+
+  /// Starts a long-lived background task that checks for updates once shortly
+  /// after launch and then at most once every 6 hours, respecting the
+  /// `autoCheckUpdates` preference. Never blocks the UI.
+  private func startUpdateChecking() {
+    updateCheckTask?.cancel()
+    // Mirror startBackgroundPolling: weak capture, re-unwrap `self` inside the
+    // loop each iteration so the closure never strongly retains the view model.
+    updateCheckTask = Task { [weak self] in
+      // Brief initial delay so launch completes before the first network call.
+      try? await Task.sleep(for: .seconds(5))
+      // First check fires immediately; subsequent ones wake every 30 minutes to
+      // test the 6-hour gate, so a machine resuming from sleep re-checks without
+      // a relaunch.
+      while !Task.isCancelled {
+        guard let self else { return }
+        await self.runUpdateCheckIfNeeded()
+        try? await Task.sleep(for: .seconds(30 * 60))
+      }
+    }
+  }
+
+  /// Runs the remote version check when the preference is enabled and the
+  /// 6-hour throttle permits. Safe to call from any context.
+  private func runUpdateCheckIfNeeded() async {
+    guard prefs.autoCheckUpdates else { return }
+    if let last = lastUpdateCheckDate,
+      Date().timeIntervalSince(last) < BarViewModel.updateCheckInterval
+    {
+      return
+    }
+    lastUpdateCheckDate = Date()
+    await performUpdateCheck()
+  }
+
+  /// Fetches the latest published version and updates `updateAvailable` /
+  /// `latestVersion`. The network call is nonisolated; the published-state
+  /// mutation happens back on the main actor (this class is @MainActor, so
+  /// the assignment after `await` re-enters the main actor automatically).
+  private func performUpdateCheck() async {
+    // Hop off main actor for the network call so we don't block the UI.
+    let latest = await Task.detached(priority: .utility) {
+      await BarUpdateChecker.fetchLatestPublishedVersion()
+    }.value
+
+    // Back on the main actor (implicit — this method is on @MainActor class).
+    let current =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    if let v = latest, BarUpdateChecker.isNewer(v, than: current) {
+      latestVersion = v
+      updateAvailable = true
+    } else {
+      latestVersion = nil
+      updateAvailable = false
+    }
+  }
+
+  /// Launches `ccs bar install --launch --await-quit` as a detached process
+  /// that survives this app terminating, then schedules a short-delay quit so
+  /// the installer can swap the (locked) bundle while no app holds it.
+  func installUpdate() {
+    guard !isInstallingUpdate else { return }
+    isInstallingUpdate = true
+
+    guard let bin = CCSBinaryResolver.resolve() else {
+      print("[CCS Bar] installUpdate: ccs binary not found; cannot install update")
+      isInstallingUpdate = false
+      return
+    }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: bin)
+    proc.arguments = ["bar", "install", "--launch", "--await-quit"]
+    // Detach stdio so the process is not tied to this app's file descriptors.
+    let null = FileHandle(forWritingAtPath: "/dev/null")
+    proc.standardOutput = null
+    proc.standardError = null
+    proc.standardInput = null
+
+    do {
+      try proc.run()
+      // Do NOT call waitUntilExit — the installer must outlive us.
+    } catch {
+      print("[CCS Bar] installUpdate: failed to launch installer: \(error)")
+      isInstallingUpdate = false
+      return
+    }
+
+    // Give the installer a moment to register, then quit so the bundle is
+    // unlocked and the installer can swap + relaunch CCS Bar.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+      NSApplication.shared.terminate(nil)
     }
   }
 

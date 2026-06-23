@@ -2,16 +2,16 @@ import AppKit
 import CCSBarCore
 import Foundation
 
-/// Opens the CCS dashboard, starting the local server when it isn't running.
-///
-/// The dashboard is just a page served by the CCS web-server, so it can't load
-/// if no server is up. When the discovered URL isn't reachable we launch
-/// `ccs config`, which boots the server AND opens the dashboard in the browser
-/// itself — so we must not also open it (that would double-open a tab).
-enum DashboardLauncher {
-  /// A GUI app does not inherit the shell PATH, so probe the common install
-  /// locations for the `ccs` binary explicitly. First executable match wins.
-  private static var ccsCandidates: [String] {
+// MARK: - Shared ccs binary resolver
+
+/// Resolves the `ccs` binary path for GUI apps that don't inherit the shell
+/// PATH. Shared by `DashboardLauncher` and `BarViewModel` so the candidate
+/// list stays in one place (DRY).
+enum CCSBinaryResolver {
+  /// Ordered list of candidate paths for the `ccs` binary. First executable
+  /// match wins. GUI apps don't inherit the shell PATH, so we must enumerate
+  /// common install locations explicitly.
+  static var candidates: [String] {
     let home = NSHomeDirectory()
     return [
       "\(home)/.bun/bin/ccs",
@@ -23,8 +23,24 @@ enum DashboardLauncher {
     ]
   }
 
+  /// Returns the path of the first executable `ccs` binary found, or `nil`
+  /// when none of the candidates exist.
+  static func resolve() -> String? {
+    candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+  }
+}
+
+// MARK: - Dashboard launcher
+
+/// Opens the CCS dashboard, starting the local server when it isn't running.
+///
+/// The dashboard is just a page served by the CCS web-server, so it can't load
+/// if no server is up. When the discovered URL isn't reachable we launch
+/// `ccs config`, which boots the server AND opens the dashboard in the browser
+/// itself — so we must not also open it (that would double-open a tab).
+enum DashboardLauncher {
   private static func ccsBinary() -> String? {
-    ccsCandidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    CCSBinaryResolver.resolve()
   }
 
   private static func dashboardURL() -> URL? {

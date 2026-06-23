@@ -76,7 +76,13 @@ struct BarMenuView: View {
         // genuine pool/model overflow.
         ScrollView {
           VStack(alignment: .leading, spacing: 12) {
-            // (1) ALERTS first — urgent quota crossings surface above everything.
+            // (1) UPDATE BANNER — shown only when a newer version is available.
+            // Placed at the very top so it is seen without scrolling.
+            if viewModel.updateAvailable {
+              updateBanner
+            }
+
+            // (2) ALERTS — urgent quota crossings surface above accounts.
             // Spend-cap alerts are opt-in OFF by default, so by default only
             // quota/reauth/cooldown conditions appear here.
             if !viewModel.activeAlerts.isEmpty {
@@ -88,10 +94,10 @@ struct BarMenuView: View {
               }
             }
 
-            // (2) SUBSCRIPTIONS — the dominant section, opens here.
+            // (3) SUBSCRIPTIONS — the dominant section, opens here.
             accountsSection
 
-            // (3) SPEND — demoted to a thin informational strip below the cockpit.
+            // (4) SPEND — demoted to a thin informational strip below the cockpit.
             // spendChartStyle and spendPeriod are threaded from the viewModel and
             // toggled/selected inline from the Spend header so changes are live.
             if let analytics = viewModel.analytics {
@@ -107,10 +113,10 @@ struct BarMenuView: View {
                 onSelectPeriod: { viewModel.spendPeriod = $0 })
             }
 
-            // (4) POOL ACCOUNTS — compact generic rows, subordinate.
+            // (5) POOL ACCOUNTS — compact generic rows, subordinate.
             poolSection
 
-            // (5) BY-SURFACE / TOP MODELS — tightened detail, below the pool.
+            // (6) BY-SURFACE / TOP MODELS — tightened detail, below the pool.
             if let analytics = viewModel.analytics,
               BarAnalyticsView(analytics: analytics, section: .breakdown).hasBreakdown
             {
@@ -158,6 +164,49 @@ struct BarMenuView: View {
       viewModel.onOpen()
       // Disarm quit on every popover open so a stale armed state never persists.
       quitArmed = false
+    }
+  }
+
+  /// "Update available" banner. Shown when `viewModel.updateAvailable` is true.
+  /// Styled to match the existing AlertRow / ErrorBanner patterns (tinted
+  /// background card, section label, borderless button).
+  @ViewBuilder private var updateBanner: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      SectionLabel("Update")
+      HStack(spacing: 10) {
+        Image(systemName: "arrow.down.circle.fill")
+          .foregroundStyle(theme.accent)
+          .font(.title3)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Update available")
+            .font(.system(.caption, design: .default).weight(.semibold))
+          if let v = viewModel.latestVersion {
+            Text("CCS Bar \(v)")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        }
+        Spacer(minLength: 4)
+        if viewModel.isInstallingUpdate {
+          HStack(spacing: 4) {
+            ProgressView().controlSize(.mini)
+            Text("Updating...")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          Button("Update Now") {
+            viewModel.installUpdate()
+          }
+          .buttonStyle(.borderless)
+          .font(.caption.weight(.medium))
+          .foregroundStyle(theme.accent)
+        }
+      }
+      .padding(.vertical, 6)
+      .padding(.horizontal, 10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
     }
   }
 

@@ -24,6 +24,7 @@ struct BarPreferencesView: View {
       Form {
         appearanceSection
         glanceSection
+        updatesSection
         quotaSection
         spendSection
         accountSection
@@ -75,6 +76,20 @@ struct BarPreferencesView: View {
         }
       }
       .onChange(of: draft.glanceMode) { _ in writeThrough() }
+    }
+  }
+
+  /// Auto-update check toggle. Bound directly to the UserDefaults-backed pref
+  /// via the same write-through pattern used for quota/spend toggles.
+  private var updatesSection: some View {
+    Section("Updates") {
+      Toggle(
+        "Check for CCS Bar updates automatically",
+        isOn: Binding(
+          get: { prefs.autoCheckUpdates },
+          set: { prefs.autoCheckUpdates = $0 }
+        )
+      )
     }
   }
 

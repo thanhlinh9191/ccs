@@ -60,6 +60,10 @@ jobs:
           # gh lives in Homebrew on the self-hosted runner; ensure it is on PATH.
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           gh release upload ccs-bar-latest macos-bar/dist/CCS-Bar.app.zip --clobber
+          printf '%s\n' "${VERSION}" > version.txt
+          gh release upload ccs-bar-latest version.txt --clobber
+          echo "[OK] Published version.txt (${VERSION}) to ccs-bar-latest"
+          rm -f version.txt
           notes="$(mktemp)"
           cat > "$notes" <<NOTES
           CCS Bar v${VERSION}

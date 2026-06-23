@@ -11,12 +11,30 @@ import CCSBarCore
 struct BarPreferences {
   let defaults: UserDefaults
 
+  // MARK: - Update-check preference key
+
+  /// UserDefaults key for the auto-update-check toggle.
+  static let autoCheckUpdatesKey = "ccsBar.autoCheckUpdates"
+
+  // MARK: - Init
+
   /// Default to the standard suite. A stable suite name is intentionally NOT used
   /// here because the rest of the app (MenuBarIcon) already persists to
   /// `.standard`; keeping one suite avoids split state across the two.
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
   }
+
+  // MARK: - Update preference
+
+  /// Whether the app should periodically check for CCS Bar updates. Defaults to
+  /// `true` — users who never open Settings still get update awareness.
+  var autoCheckUpdates: Bool {
+    get { defaults.bool(forKey: BarPreferences.autoCheckUpdatesKey) }
+    nonmutating set { defaults.set(newValue, forKey: BarPreferences.autoCheckUpdatesKey) }
+  }
+
+  // MARK: - Registration
 
   /// Seed the registration domain so missing keys resolve to their real defaults
   /// rather than the type-zero value. Idempotent — safe to call on every launch.
@@ -30,6 +48,9 @@ struct BarPreferences {
     var d = BarAlertPrefsStore.registrationDefaults
     d[BarAlertPrefsStore.Key.dailyEnabled] = false
     d[BarAlertPrefsStore.Key.monthEnabled] = false
+    // autoCheckUpdates defaults to true — registered here so the Bool key is
+    // never absent (absent Bool reads as false, which would silently opt-out).
+    d[BarPreferences.autoCheckUpdatesKey] = true
     defaults.register(defaults: d)
   }
 

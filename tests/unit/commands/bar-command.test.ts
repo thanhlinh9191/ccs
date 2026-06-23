@@ -3420,3 +3420,55 @@ describe('defaultFindRunningServer: streaming lower-priority probes', () => {
     expect(lowerPriorityProbeStarted).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GH-1588 — `--await-quit` waits for a running app to exit, then swaps + relaunches
+// ---------------------------------------------------------------------------
+
+describe('bar install: --await-quit waits for the running app to quit (GH-1588)', () => {
+  const FAKE_DOWNLOAD_URL =
+    'https://github.com/kaitranntt/ccs/releases/download/ccs-bar-latest/CCS-Bar.app.zip';
+
+  function baseDeps(appsDir: string, isBarRunning: () => Promise<boolean>) {
+    return {
+      fetchReleaseAsset: async () => ({ downloadUrl: FAKE_DOWNLOAD_URL, sha256: FAKE_SHA256 }),
+      downloadAndExtract: async (_url: string, dest: string) => {
+        fs.mkdirSync(path.join(dest, 'CCS Bar.app'), { recursive: true });
+      },
+      verifyCompat: async () => ({ compatible: true, reason: 'ok' as const }),
+      readAppBundleVersion: () => '1.0.0',
+      isBarRunning,
+      getCcsDir: () => path.join(tempHome, '.ccs'),
+      getAppsDir: () => appsDir,
+    };
+  }
+
+  it('proceeds with swap + relaunch once the running app exits', async () => {
+    const appsDir = path.join(tempHome, 'Applications');
+    let launchCalled = false;
+    // Running on the first probe (still up), gone on every probe after — this
+    // models the in-app updater quitting itself right after spawning
+    // `ccs bar install --launch --await-quit`.
+    let probes = 0;
+    const isBarRunning = async () => {
+      probes += 1;
+      return probes === 1;
+    };
+
+    const { handleBarInstall } = await loadInstallSubcommand();
+
+    await handleBarInstall(['--launch', '--await-quit'], {
+      ...baseDeps(appsDir, isBarRunning),
+      launchBar: async () => {
+        launchCalled = true;
+      },
+      promptLaunch: async () => false,
+    });
+
+    // The wait fired (app seen running first), then the install completed and
+    // relaunched into the new build.
+    expect(consoleOutput.join('\n')).toMatch(/Waiting for CCS Bar to quit/i);
+    expect(launchCalled).toBe(true);
+    expect(probes).toBeGreaterThanOrEqual(2);
+  });
+});

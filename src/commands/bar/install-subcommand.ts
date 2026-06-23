@@ -490,9 +490,10 @@ export async function handleBarInstall(
   args: string[],
   deps: Partial<InstallDeps> = {}
 ): Promise<void> {
-  // Parse --launch / --no-launch flags before delegating to deps.
+  // Parse --launch / --no-launch / --await-quit flags before delegating to deps.
   const forceLaunch = hasAnyFlag(args, ['--launch']);
   const noLaunch = hasAnyFlag(args, ['--no-launch']);
+  const awaitQuit = hasAnyFlag(args, ['--await-quit']);
 
   const fetchReleaseAsset = deps.fetchReleaseAsset ?? defaultFetchReleaseAsset;
   const downloadAndExtract = deps.downloadAndExtract ?? defaultDownloadAndExtract;
@@ -582,6 +583,36 @@ export async function handleBarInstall(
     console.error(`[i] Files found in staging: ${found}`);
     cleanupStaging();
     return;
+  }
+
+  // 3b-pre. --await-quit: if the app is running, poll until it exits before swapping.
+  //   Without this flag the existing behavior is preserved exactly (no change).
+  if (awaitQuit) {
+    const POLL_INTERVAL_MS = 300;
+    const TIMEOUT_MS = 15_000;
+    const deadline = Date.now() + TIMEOUT_MS;
+
+    if (await isBarRunning()) {
+      console.log('[i] Waiting for CCS Bar to quit before swapping...');
+
+      let exited = false;
+      while (Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        if (!(await isBarRunning())) {
+          exited = true;
+          break;
+        }
+      }
+
+      if (!exited) {
+        console.error(
+          '[!] CCS Bar is still running; quit it from the menu bar and re-run `ccs bar install`.'
+        );
+        process.exitCode = 1;
+        cleanupStaging();
+        return;
+      }
+    }
   }
 
   // 3b. New bundle verified in staging — now safe to remove the old install.
