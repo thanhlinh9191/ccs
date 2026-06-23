@@ -73,6 +73,6 @@ jobs:
 
           Built automatically from main when macos-bar changes.
           NOTES
-          gh release edit ccs-bar-latest --title "CCS Bar v${VERSION}" --notes-file "$notes"
+          gh release edit ccs-bar-latest --target "$GITHUB_SHA" --title "CCS Bar v${VERSION}" --notes-file "$notes"
           rm -f "$notes"
           echo "[OK] Published CCS Bar v${VERSION} to ccs-bar-latest"
