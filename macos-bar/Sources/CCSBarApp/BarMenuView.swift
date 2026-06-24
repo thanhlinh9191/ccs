@@ -36,6 +36,11 @@ struct BarMenuView: View {
   /// monotonically (ContentHeightKey.reduce takes the max), so the frame never
   /// thrashes downward.
   @State private var contentHeight: CGFloat = 0
+  /// Multi-profile carousel: which provider page is currently visible. Resets to
+  /// first provider on popover re-open (KISS — no UserDefaults persistence needed).
+  // Per-provider carousel position: provider -> selected profile row id. Each
+  // provider has its own profile carousel, so selection is tracked per provider.
+  @State private var selectedProfileByProvider: [String: String] = [:]
 
   // MARK: - Screen cap
 
@@ -164,6 +169,9 @@ struct BarMenuView: View {
       viewModel.onOpen()
       // Disarm quit on every popover open so a stale armed state never persists.
       quitArmed = false
+      // Reset each provider's carousel to its first profile on every open — KISS,
+      // no persistence needed.
+      selectedProfileByProvider = [:]
     }
   }
 
@@ -218,7 +226,7 @@ struct BarMenuView: View {
   /// present, preserving the single "Accounts" header for a CLIProxy-only setup.
   @ViewBuilder private var accountsSection: some View {
     let parts = BarFormatting.partitionSubscriptions(viewModel.rows)
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 6) {
       if let error = viewModel.lastError {
         ErrorBanner(message: error)
       }
@@ -234,9 +242,62 @@ struct BarMenuView: View {
           BarRowView(row: row, viewModel: viewModel)
         }
       } else {
+        // Per-provider profile carousels: group subscription rows by provider, and
+        // render each provider as its OWN horizontally-paged carousel of PROFILE
+        // cards — one profile visible at a time, swipe left/right between that
+        // provider's profiles, page dots indicate count. Provider sections stack
+        // vertically. A provider with a single profile shows just its card (no
+        // carousel, no dots).
+        let groups = Dictionary(
+          grouping: orderedSubscriptions(parts.subscriptions), by: { $0.provider })
+        let providers = groups.keys.sorted()  // stable: "claude-code" < "codex"
+        let multiProvider = providers.count > 1
         subscriptionsHeader(parts.subscriptions)
-        ForEach(orderedSubscriptions(parts.subscriptions)) { row in
-          BarSubscriptionCard(row: row, onRefresh: { viewModel.forceRefresh() })
+        ForEach(providers, id: \.self) { prov in
+          let rows = groups[prov] ?? []
+          VStack(alignment: .leading, spacing: 4) {
+            // Provider caption to delineate sections when more than one provider.
+            if multiProvider {
+              Text(BarFormatting.providerLabel(prov))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            }
+            if rows.count <= 1 {
+              // Single profile — render the card directly, no carousel.
+              if let row = rows.first {
+                BarSubscriptionCard(
+                  row: row, isParked: row.paused,
+                  onRefresh: { viewModel.forceRefresh() })
+              }
+            } else {
+              ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                  ForEach(rows) { row in
+                    BarSubscriptionCard(
+                      row: row, isParked: row.paused,
+                      onRefresh: { viewModel.forceRefresh() })
+                      // 340 leaves 10px side padding inside the 360-wide popover.
+                      .frame(width: 340, alignment: .leading)
+                      .padding(.horizontal, 2)
+                      .id(row.id)
+                  }
+                }
+                // scrollTargetLayout on the HStack (the paging container) snaps to
+                // each profile card on .paging behavior.
+                .scrollTargetLayout()
+              }
+              .scrollTargetBehavior(.paging)
+              .scrollPosition(id: Binding(
+                get: { selectedProfileByProvider[prov] ?? rows.first?.id },
+                set: { selectedProfileByProvider[prov] = $0 ?? rows.first?.id }))
+              .frame(height: carouselHeight(rows))
+              // Page controls — clickable prev/next arrows + dots so the carousel
+              // is navigable by MOUSE (click), not just by trackpad swipe.
+              // Programmatically setting the scrollPosition binding pages the
+              // ScrollView; withAnimation gives the same feel as a swipe.
+              carouselControls(prov: prov, rows: rows)
+            }
+          }
         }
       }
     }
@@ -274,11 +335,14 @@ struct BarMenuView: View {
     }
   }
 
-  /// Order subscription cards by tightest binding window ascending (closest to
-  /// empty on top). Rows with no binding window (error/reauth) sink to the bottom
-  /// so the actionable quota always leads.
+  /// Order subscription cards so the default/base account leads its provider
+  /// carousel (it is the account the user runs by default), then by tightest
+  /// binding window ascending (closest to empty next). Rows with no binding
+  /// window (error/reauth) sink to the bottom so actionable quota leads.
   private func orderedSubscriptions(_ subs: [BarSummaryRow]) -> [BarSummaryRow] {
     subs.sorted { a, b in
+      // Default account first within its provider group.
+      if a.isDefault != b.isDefault { return a.isDefault }
       let ra = BarQuotaGauge.selectBindingWindow(a.quotaWindows ?? [])?.remainingPercent
       let rb = BarQuotaGauge.selectBindingWindow(b.quotaWindows ?? [])?.remainingPercent
       switch (ra, rb) {
@@ -293,6 +357,64 @@ struct BarMenuView: View {
         return (a.displayName ?? a.provider) < (b.displayName ?? b.provider)
       }
     }
+  }
+
+  /// Prev/next arrows + clickable dots for a provider's profile carousel, so it
+  /// is navigable by MOUSE (click), not only by trackpad swipe. Selecting a page
+  /// sets the scrollPosition binding, which scrolls the ScrollView to that card.
+  @ViewBuilder private func carouselControls(prov: String, rows: [BarSummaryRow]) -> some View {
+    let currentId = selectedProfileByProvider[prov] ?? rows.first?.id
+    let curIdx = rows.firstIndex(where: { $0.id == currentId }) ?? 0
+    HStack(spacing: 7) {
+      pageArrow(systemName: "chevron.left", enabled: curIdx > 0) {
+        if curIdx > 0 { selectPage(prov, rows[curIdx - 1].id) }
+      }
+      ForEach(rows) { row in
+        Circle()
+          .fill(currentId == row.id ? theme.subscription : Color.secondary.opacity(0.3))
+          .frame(width: 6, height: 6)
+          .padding(4)  // larger mouse hit target than the 6pt dot
+          .contentShape(Rectangle())
+          .onTapGesture { selectPage(prov, row.id) }
+      }
+      pageArrow(systemName: "chevron.right", enabled: curIdx < rows.count - 1) {
+        if curIdx < rows.count - 1 { selectPage(prov, rows[curIdx + 1].id) }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .center)
+  }
+
+  /// Animate the carousel to the given profile card (mouse click or dot tap).
+  private func selectPage(_ prov: String, _ id: String) {
+    withAnimation(.easeInOut(duration: 0.2)) {
+      selectedProfileByProvider[prov] = id
+    }
+  }
+
+  @ViewBuilder private func pageArrow(
+    systemName: String, enabled: Bool, action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: systemName)
+        .font(.system(size: 9, weight: .bold))
+        .frame(width: 16, height: 16)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
+    .opacity(enabled ? 0.7 : 0.25)
+  }
+
+  /// Height of the tallest single card in a carousel — only one card is visible
+  /// at a time, so the paged frame is sized to fit it WITHOUT reserving blank
+  /// space beneath. Card = vertical padding (16) + title row (~22) + one bar per
+  /// quota window (~20) + an optional stale footnote (~16); a parked/reauth card
+  /// is just the title row plus a one-line status.
+  private func carouselHeight(_ rows: [BarSummaryRow]) -> CGFloat {
+    let maxWindows = rows.map { $0.quotaWindows?.count ?? 0 }.max() ?? 0
+    if maxWindows == 0 { return 60 }
+    let hasFootnote = rows.contains { $0.staleAsOf != nil }
+    return 40 + CGFloat(maxWindows) * 20 + (hasFootnote ? 16 : 0)
   }
 
   private var header: some View {
