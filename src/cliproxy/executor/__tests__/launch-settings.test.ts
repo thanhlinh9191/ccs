@@ -91,6 +91,17 @@ describe('buildLaunchSettingsOverlay', () => {
       'http://127.0.0.1:50118/api/provider/codex'
     );
   });
+
+  it('falls back to an env-only overlay when the settings file is corrupt', () => {
+    fs.writeFileSync(settingsPath, '{ not valid json');
+    const { settings, changed } = buildLaunchSettingsOverlay(settingsPath, {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:50118/api/provider/codex',
+    } as NodeJS.ProcessEnv);
+    expect(changed).toBe(true);
+    expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe(
+      'http://127.0.0.1:50118/api/provider/codex'
+    );
+  });
 });
 
 describe('prepareLaunchSettings', () => {
@@ -126,5 +137,21 @@ describe('prepareLaunchSettings', () => {
     // Cleanup must not remove the persisted settings file.
     result.cleanup();
     expect(fs.existsSync(settingsPath)).toBe(true);
+  });
+
+  it('writes the overlay with 0600 file mode inside a 0700 dir (POSIX)', () => {
+    if (process.platform === 'win32') return; // chmod modes are not enforced on Windows
+    writePersisted({
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317/api/provider/codex' },
+    });
+    const result = prepareLaunchSettings(settingsPath, {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:50118/api/provider/codex',
+    } as NodeJS.ProcessEnv);
+    try {
+      expect(fs.statSync(result.settingsPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.dirname(result.settingsPath)).mode & 0o777).toBe(0o700);
+    } finally {
+      result.cleanup();
+    }
   });
 });
