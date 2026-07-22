@@ -4,9 +4,6 @@ on:
   release:
     types:
       - published
-  schedule:
-    # Nightly at 07:00 UTC
-    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       do_up:

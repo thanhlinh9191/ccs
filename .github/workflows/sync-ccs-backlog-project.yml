@@ -9,9 +9,6 @@ on:
       - labeled
       - unlabeled
   workflow_dispatch:
-  schedule:
-    - cron: '17 3 * * *'
-
 concurrency:
   group: sync-ccs-backlog-project
   cancel-in-progress: false
